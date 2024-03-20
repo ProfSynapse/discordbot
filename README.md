@@ -140,8 +140,7 @@ If you want to host the bot continuously without running it on your local machin
 
 
 ## Roadmap
-1. Add limited memory.
-2. Add ability to upload sources from discord.
+1. Add ability to find and summarize shared links.
 
 ## Contributing
 
