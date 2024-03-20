@@ -100,6 +100,39 @@ async def prof(interaction: discord.Interaction, *, prompt: str):
         for chunk in message_chunks:
             await interaction.followup.send(chunk)
 
+@bot.tree.command(name="sum", description="Summarize links from the previous week")
+async def sum(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    try:
+        one_week_ago = datetime.datetime.utcnow() - datetime.timedelta(weeks=1)
+        links = []
+
+        for channel in interaction.guild.text_channels:
+            async for message in channel.history(limit=None, after=one_week_ago):
+                if message.author != bot.user and any(url in message.content for url in ["http://", "https://"]):
+                    links.append(message.content)
+
+        if links:
+            link_metadata = []
+            for link in links:
+                title, description = get_metadata(link)
+                link_metadata.append(f"Link: {link}\nTitle: {title}\nDescription: {description}")
+
+            link_metadata_str = "\n\n".join(link_metadata)
+
+            session_uuid = create_chat_session()
+            prompt = f"Provide the links and a one-sentence description for each of the following links based on their title and description:\n\n{link_metadata_str}"
+            bot_response = gpt_response(session_uuid, prompt)
+
+            summary_message = "**Link Summaries (Previous Week):**\n" + bot_response
+            message_chunks = chunk_message_by_paragraphs(summary_message)
+
+            for chunk in message_chunks:
+                await interaction.followup.send(chunk)
+        else:
+            await interaction.followup.send("No links found in the channels for the previous week.") 
+
     except Exception as e:
         logging.error(f"An error occurred: {str(e)}")
         await interaction.followup.send("An error occurred while processing your request. Please try again later.")
