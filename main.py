@@ -5,6 +5,11 @@ import os
 from discord_api import create_chat_session, gpt_response
 import textwrap
 import logging
+from conversation_history import update_conversation_history, get_user_context
+from data_source import upload_data_source
+import datetime
+from bs4 import BeautifulSoup
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -82,15 +87,21 @@ async def prof(interaction: discord.Interaction, *, prompt: str):
     """
     await interaction.response.defer()
     try:
-        # Validate and sanitize the user input
-        prompt = prompt.strip()
-        if not prompt:
-            await interaction.followup.send("Please provide a valid prompt.")
-            return
+        # Get the user's ID
+        user_id = str(interaction.user.id)
+
+        # Get the user's context based on their conversation history
+        user_context = get_user_context(user_id)
+
+        # Update the conversation history with the user's prompt
+        update_conversation_history(user_id, f"User: {prompt}")
 
         # Create a chat session and get the response
         session_uuid = create_chat_session()
-        bot_response = gpt_response(session_uuid, prompt)
+        bot_response = gpt_response(session_uuid, f"{user_context}\nUser: {prompt}")
+
+        # Update the conversation history with the bot's response
+        update_conversation_history(user_id, f"Assistant: {bot_response}")
 
         # Combine the query and the response
         full_message = f"**Query:**\n{prompt}\n\n{bot_response}"
@@ -103,5 +114,55 @@ async def prof(interaction: discord.Interaction, *, prompt: str):
     except Exception as e:
         logging.error(f"An error occurred: {str(e)}")
         await interaction.followup.send("An error occurred while processing your request. Please try again later.")
+
+def get_metadata(url):
+    try:
+        response = requests.get(url)
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        title = soup.find('title').text.strip() if soup.find('title') else ''
+        description = soup.find('meta', attrs={'name': 'description'})['content'].strip() if soup.find('meta', attrs={'name': 'description'}) else ''
+
+        return title, description
+    except Exception as e:
+        logging.exception(f"Error occurred while retrieving metadata for URL '{url}': {str(e)}")
+        return '', ''
+
+@bot.tree.command(name="sum", description="Summarize links from the previous week")
+async def sum(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    try:
+        one_week_ago = datetime.datetime.utcnow() - datetime.timedelta(weeks=1)
+        links = []
+
+        for channel in interaction.guild.text_channels:
+            async for message in channel.history(limit=None, after=one_week_ago):
+                if message.author != bot.user and any(url in message.content for url in ["http://", "https://"]):
+                    links.append(message.content)
+
+        if links:
+            link_metadata = []
+            for link in links:
+                title, description = get_metadata(link)
+                link_metadata.append(f"Link: {link}\nTitle: {title}\nDescription: {description}")
+
+            link_metadata_str = "\n\n".join(link_metadata)
+
+            session_uuid = create_chat_session()
+            prompt = f"Provide the links and a one-sentence description for each of the following links based on their title and description:\n\n{link_metadata_str}"
+            bot_response = gpt_response(session_uuid, prompt)
+
+            summary_message = "**Link Summaries (Previous Week):**\n" + bot_response
+            message_chunks = chunk_message_by_paragraphs(summary_message)
+
+            for chunk in message_chunks:
+                await interaction.followup.send(chunk)
+        else:
+            await interaction.followup.send("No links found in the channels for the previous week.")
+
+    except Exception as e:
+        logging.exception(f"Error occurred in /sum command: {str(e)}")
+        await interaction.followup.send("An error occurred while processing the /sum command. Please check the bot logs for more information.")
 
 bot.run(DISCORD_TOKEN)
