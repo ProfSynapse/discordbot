@@ -10,9 +10,6 @@ This Discord bot integrates with the [GPT Trainer API](https://guide.gpt-trainer
 - Implements basic rate limiting to avoid excessive API requests
 
 ## Prerequisites
-Absolutely! Here's the updated prerequisite section considering the GPT Trainer service on [https://gpt-trainer.com/](https://gpt-trainer.com/) :
-
-**Prerequisites**
 
 * **Python 3.x:** 
     * **Download:** Ensure you have the latest version from the official Python website: [https://www.python.org/downloads/](https://www.python.org/downloads/)
