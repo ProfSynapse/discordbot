@@ -76,6 +76,47 @@ def chunk_message_by_paragraphs(message, max_length=2000):
 
     return chunked_messages
 
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+
+    if any(url in message.content for url in ["http://", "https://"]):
+        await message.add_reaction("📚")  # Add a book emoji to messages containing a URL
+
+    await bot.process_commands(message)
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    if user == bot.user:
+        return
+
+    if reaction.emoji == "📚":  # Check if the reaction is the book emoji
+        await process_data_source(reaction.message)
+
+async def process_data_source(message):
+    # Extract the URL from the message content
+    url = extract_url(message.content)
+
+    if url:
+        try:
+            # Upload the data source to the bot's knowledge base
+            upload_data_source(url)
+            await message.channel.send(f"Data source '{url}' has been added to the bot's knowledge base.")
+        except Exception as e:
+            logging.error(f"Error uploading data source: {str(e)}")
+            await message.channel.send("An error occurred while uploading the data source.")
+    else:
+        await message.channel.send("No valid URL found in the message.")
+
+def extract_url(message_content):
+    # Extract the first URL from the message content
+    words = message_content.split()
+    for word in words:
+        if word.startswith("http://") or word.startswith("https://"):
+            return word
+    return None
+
 @bot.tree.command(name="prof", description="Chat with Professor Synapse")
 async def prof(interaction: discord.Interaction, *, prompt: str):
     """
