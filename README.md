@@ -10,11 +10,30 @@ This Discord bot integrates with the [GPT Trainer API](https://guide.gpt-trainer
 - Implements basic rate limiting to avoid excessive API requests
 
 ## Prerequisites
+Absolutely! Here's the updated prerequisite section considering the GPT Trainer service on [https://gpt-trainer.com/](https://gpt-trainer.com/) :
 
-- Python 3.x installed on your computer
-- Discord bot token (obtained from the Discord Developer Portal)
-- GPT Trainer API token (obtained from the GPT Trainer website)
-- GPT Trainer chatbot UUID (obtained from the GPT Trainer website)
+**Prerequisites**
+
+* **Python 3.x:** 
+    * **Download:** Ensure you have the latest version from the official Python website: [https://www.python.org/downloads/](https://www.python.org/downloads/)
+    * **Installation:** Follow the instructions for your operating system.
+
+* **Discord Bot Token:**
+    1. **Discord Developer Portal:** Visit [Dev Portal](https://discord.com/developers/applications)
+    2. **Create an Application:** Click "New Application" and give your bot a name.
+    3. **Bot Creation:** Navigate to the "Bot" tab and click "Add Bot".
+    4. **Token:** Under the bot's profile, you'll see a "Token" section. Click "Copy" to obtain your token. **Keep this token secure!**
+
+* **GPT Trainer API Token and Chatbot UUID:** 
+    1. **GPT Trainer Website:**  Visit [https://gpt-trainer.com/](https://gpt-trainer.com/) 
+    2. **Account Creation:** Create an account.
+    3. **Create a Chatbot:** Follow the GPT Trainer platform's instructions to create a new chatbot project.
+    4. **API Token and UUID:** Within your chatbot project settings, you should find your API token and the chatbot's unique UUID.  
+
+**Additional Notes**
+
+* **GPT Trainer Documentation:** Refer to the official documentation on the GPT Trainer website for the most up-to-date guidance on setting up your chatbot and obtaining the prerequisites. 
+* **Code Examples:** GPT Trainer likely provides code examples or a library to ease the interaction between your Discord bot and their service.
 
 ## Getting Started
 
