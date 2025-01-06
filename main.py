@@ -10,6 +10,7 @@ Features:
 
 import discord
 from discord.ext import commands
+from discord import app_commands  # Add this import
 import textwrap
 import logging
 from api_client import api_client, APIResponseError
@@ -25,6 +26,15 @@ class ImageSize(Enum):
     SQUARE = "1024x1024"
     PORTRAIT = "1024x1792"
     LANDSCAPE = "1792x1024"
+    
+    @classmethod
+    def get_description(cls, size: str) -> str:
+        descriptions = {
+            "square": "Perfect square (1024x1024)",
+            "portrait": "Vertical/portrait (1024x1792)",
+            "landscape": "Horizontal/landscape (1792x1024)"
+        }
+        return descriptions.get(size.lower(), "Unknown size")
 
 class DiscordBot(commands.Bot):
     """
@@ -116,7 +126,8 @@ class DiscordBot(commands.Bot):
 
     async def generate_image(self, interaction: discord.Interaction, prompt: str, size: ImageSize = ImageSize.SQUARE):
         """Generate an image using DALL-E 3"""
-        await interaction.response.defer()
+        # Use a more artistic defer message
+        await interaction.response.defer(thinking_about=f"🎨 *Professor Synapse grabs his digital paintbrush and canvas...*")
         try:
             response = self.openai_client.images.generate(
                 model="dall-e-3",
@@ -127,12 +138,17 @@ class DiscordBot(commands.Bot):
             )
             
             image_url = response.data[0].url
-            await interaction.followup.send(f"**{interaction.user.display_name}'s image prompt:**\n{prompt}\n{image_url}")
+            # More artistic response format
+            await interaction.followup.send(
+                f"**A masterpiece commissioned by {interaction.user.display_name}:**\n" +
+                f"*{prompt}*\n\n" +
+                f"{image_url}"
+            )
             
         except Exception as e:
             logging.error(f"Image generation error: {str(e)}")
             await interaction.followup.send(
-                "Sorry, I couldn't generate that image. Please try again with a different prompt."
+                "🎨 *Alas, my artistic vision has failed me. Perhaps we should try a different subject?*"
             )
 
 # Create bot instance
@@ -146,18 +162,27 @@ async def prof_command(interaction: discord.Interaction, *, prompt: str):
 
 @bot.tree.command(name="image", description="Generate an image using DALL-E")
 @commands.cooldown(1, 60, commands.BucketType.user)
+@app_commands.describe(
+    prompt="What would you like me to draw?",
+    size="Choose the image orientation/size"
+)
 async def image_command(
     interaction: discord.Interaction, 
     prompt: str,
-    size: str = "square"
+    size: app_commands.Choice[str] = app_commands.Choice(name="Square 1024x1024", value="square")
 ):
     """Generate an image using DALL-E 3"""
+    size_choices = [
+        app_commands.Choice(name="Square 1024x1024", value="square"),
+        app_commands.Choice(name="Portrait 1024x1792", value="portrait"),
+        app_commands.Choice(name="Landscape 1792x1024", value="landscape")
+    ]
     size_map = {
         "square": ImageSize.SQUARE,
         "portrait": ImageSize.PORTRAIT,
         "landscape": ImageSize.LANDSCAPE
     }
-    image_size = size_map.get(size.lower(), ImageSize.SQUARE)
+    image_size = size_map.get(size.value, ImageSize.SQUARE)
     await bot.generate_image(interaction, prompt, image_size)
 
 @bot.event
