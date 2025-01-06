@@ -126,8 +126,12 @@ class DiscordBot(commands.Bot):
 
     async def generate_image(self, interaction: discord.Interaction, prompt: str, size: ImageSize = ImageSize.SQUARE):
         """Generate an image using DALL-E 3"""
-        # Use a more artistic defer message
-        await interaction.response.defer(thinking_about=f"🎨 *Professor Synapse grabs his digital paintbrush and canvas...*")
+        # Simple defer - we'll send the artistic message after
+        await interaction.response.defer()
+        
+        # Send the "preparing" message
+        await interaction.followup.send("🎨 *Professor Synapse grabs his digital paintbrush and canvas...*")
+        
         try:
             response = self.openai_client.images.generate(
                 model="dall-e-3",
@@ -140,7 +144,7 @@ class DiscordBot(commands.Bot):
             image_url = response.data[0].url
             # More artistic response format
             await interaction.followup.send(
-                f"**A masterpiece commissioned by {interaction.user.display_name}:**\n" +
+                f"🎨 **A masterpiece commissioned by {interaction.user.display_name}:**\n" +
                 f"*{prompt}*\n\n" +
                 f"{image_url}"
             )
