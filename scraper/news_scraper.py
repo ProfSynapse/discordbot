@@ -102,28 +102,16 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                     if not summary and 'description' in entry:
                         summary = entry['description']
                     
-                    # More thorough HTML cleaning
-                    summary = (summary.replace('<p>', '')
-                                     .replace('</p>', '\n')
-                                     .replace('<figure>', '')
-                                     .replace('</figure>', '')
-                                     .replace('<figcaption>', '_')
-                                     .replace('</figcaption>', '_\n')
-                                     .replace('<img', '[Image')
-                                     .replace('/>', ']')
-                                     .replace('alt="', 'description: "'))
-                    
-                    # Remove HTML IDs
-                    summary = re.sub(r'id="[^"]*"', '', summary)
-                    # Remove any remaining HTML tags
-                    summary = re.sub(r'<[^>]+>', '', summary)
-                    # Fix multiple newlines
-                    summary = re.sub(r'\n\s*\n', '\n\n', summary)
-                    summary = summary.strip()
-                    
-                    # Extract image URL
+                    # Extract image URL from HTML content
                     image_url = None
-                    if 'media_content' in entry:
+                    if '[Image' in summary:
+                        # Extract URL from the [Image...] format
+                        img_match = re.search(r'src="([^"]+)"', summary)
+                        if img_match:
+                            image_url = img_match.group(1)
+                            # Remove the entire [Image...] text from summary
+                            summary = re.sub(r'\[Image[^\]]+\]', '', summary)
+                    elif 'media_content' in entry:
                         media_urls = [m['url'] for m in entry.media_content if 'url' in m]
                         if media_urls:
                             image_url = media_urls[0]
@@ -133,6 +121,26 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                         if image_urls:
                             image_url = image_urls[0]
 
+                    # Clean the summary more thoroughly
+                    summary = (summary.replace('<p>', '')
+                                     .replace('</p>', '\n')
+                                     .replace('<figure>', '')
+                                     .replace('</figure>', '')
+                                     .replace('<figcaption>', '')
+                                     .replace('</figcaption>', '')
+                                     .replace('<img', '')
+                                     .replace('/>', ''))
+                    
+                    # Remove HTML IDs
+                    summary = re.sub(r'id="[^"]*"', '', summary)
+                    # Remove any remaining HTML tags
+                    summary = re.sub(r'<[^>]+>', '', summary)
+                    # Remove any remaining "Image:" or "Source:" tags
+                    summary = re.sub(r'Image:\s*[^\n]+\n?', '', summary)
+                    # Fix multiple newlines
+                    summary = re.sub(r'\n\s*\n', '\n\n', summary)
+                    summary = summary.strip()
+                    
                     # Check if article is AI-related
                     if any(keyword in entry.title.lower() or keyword in summary.lower() 
                           for keyword in AI_KEYWORDS):
