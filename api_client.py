@@ -210,5 +210,26 @@ class GPTTrainerAPI:
             logging.error(f"Failed to upload data source: {e}")
             return False
 
+    async def summarize_content(self, url: str, content: str) -> str:
+        """Get a structured summary of the article content."""
+        try:
+            endpoint = f'chatbot/{config.CHATBOT_UUID}/session/summary'
+            data = {
+                'url': url,
+                'content': content,
+                'prompt': """Please provide a structured summary of this article in the following format:
+                           Title: [Article Title]
+                           Key Points:
+                           - [First key point]
+                           - [Second key point]
+                           - [Third key point]
+                           Main Takeaway: [Brief one-sentence takeaway]"""
+            }
+            response = await self._make_request('POST', endpoint, json=data)
+            return response.get('summary', "Sorry, I couldn't generate a summary.")
+        except Exception as e:
+            logging.error(f"Failed to generate summary: {e}")
+            return "Sorry, I couldn't generate a summary at this time."
+
 # Create a singleton instance
 api_client = GPTTrainerAPI()

@@ -18,9 +18,11 @@ from config import config
 from scraper.scheduler import ArticleScheduler
 from openai import OpenAI
 from enum import Enum
+from scraper.content_scraper import scrape_article_content
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class ImageSize(Enum):
     SQUARE = "1024x1024"
@@ -256,7 +258,7 @@ async def on_reaction_add(reaction, user):
     if user == bot.user:
         return
 
-    if reaction.emoji == "📚":  # Check if the reaction is the book emoji
+    if reaction.emoji == "📚":
         await process_data_source(reaction.message)
 
 # Add error handling decorator for background tasks
@@ -270,7 +272,43 @@ def with_error_handling(func):
 
 @with_error_handling
 async def process_data_source(message):
-    await bot.process_data_source(message)
+    """Process a message containing a URL."""
+    url = extract_url(message.content)
+    if not url:
+        return
+        
+    # Send initial processing message
+    processing_msg = await message.channel.send("🔍 Processing article content...")
+    
+    try:
+        # Scrape article content
+        content = await scrape_article_content(url)
+        if not content:
+            await processing_msg.edit(content="❌ Sorry, I couldn't read that article.")
+            return
+            
+        # Upload to GPT Trainer
+        async with api_client as client:
+            # Upload content
+            await client.upload_data_source(url)
+            
+            # Get summary
+            summary = await client.summarize_content(url, content['content'])
+            
+            # Format and send response
+            embed = discord.Embed(
+                title=content['title'],
+                url=url,
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="Summary", value=summary, inline=False)
+            embed.set_footer(text="Article added to my knowledge base! 📚")
+            
+            await processing_msg.edit(content=None, embed=embed)
+            
+    except Exception as e:
+        logger.error(f"Error processing article: {e}")
+        await processing_msg.edit(content="❌ An error occurred while processing the article.")
 
 def extract_url(message_content):
     """

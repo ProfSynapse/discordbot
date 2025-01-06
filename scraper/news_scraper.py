@@ -1,159 +1,137 @@
 import logging
 import asyncio
 from typing import List, Dict
-from pyppeteer import launch
-from datetime import datetime, timedelta
-import random
+import aiohttp
+import feedparser
+from datetime import datetime
+import pytz
+from time import mktime
+from email.utils import parsedate_to_datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 SCRAPED_URLS = set()
 
-# List of common user agents for randomization
-USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0'
+# Update RSS_FEEDS with format info
+RSS_FEEDS = {
+    "TechCrunch": {
+        "url": "https://techcrunch.com/feed/",
+        "date_format": "rfc822"  # Standard RSS date format
+    },
+    "VentureBeat": {
+        "url": "https://feeds.feedburner.com/venturebeat/SZYF",
+        "date_format": "rfc822"
+    },
+    "The Verge": {
+        "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+        "date_format": "rfc822"
+    },
+    "MIT Tech Review": {
+        "url": "https://www.technologyreview.com/feed/artificial-intelligence/rss/",
+        "date_format": "rfc822"
+    },
+    "ArXiv AI": {
+        "url": "http://export.arxiv.org/rss/cs.AI",
+        "date_format": "arxiv"  # Special handling for arXiv
+    }
+}
+
+# Keywords to filter AI-related content
+AI_KEYWORDS = [
+    'artificial intelligence', 'machine learning', 'deep learning', 
+    'neural network', 'ai ', 'large language model',
+    'llm', 'gpt', 'chatgpt', 'transformer', 'openai', 'anthropic',
+    'gemini', 'claude', 'mistral', 'reinforcement learning', 'ethics', 'reasoning'
 ]
 
-async def create_browser():
-    return await launch(
-        headless=True,
-        args=[
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--disable-gpu'
-        ]
-    )
-
-async def scrape_axios() -> List[Dict]:
+def parse_date(date_str: str, format_type: str) -> datetime:
+    """Parse date string based on source format."""
     try:
-        logger.info("Starting Axios scrape")
-        browser = await create_browser()
-        
-        try:
-            page = await browser.newPage()
-            await page.setUserAgent(random.choice(USER_AGENTS))
-            await page.setViewport({'width': 1920, 'height': 1080})
+        if format_type == "rfc822":
+            return parsedate_to_datetime(date_str)
+        elif format_type == "arxiv":
+            # arXiv uses a different format
+            return datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC)
+        else:
+            # Fallback to RFC822
+            return parsedate_to_datetime(date_str)
+    except Exception as e:
+        logging.error(f"Error parsing date {date_str}: {e}")
+        return datetime.min.replace(tzinfo=pytz.UTC)
+
+async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict) -> List[Dict]:
+    try:
+        logger.info(f"Fetching {name} RSS feed")
+        async with session.get(feed_info["url"]) as response:
+            content = await response.text()
+            feed = feedparser.parse(content)
             
-            # Add random delay to seem more human-like
-            await asyncio.sleep(random.uniform(2, 4))
-            
-            await page.goto('https://www.axios.com/technology', {'waitUntil': 'networkidle0'})
-            
-            articles = await page.evaluate('''() => {
-                const articles = [];
-                document.querySelectorAll('article').forEach(article => {
-                    const titleEl = article.querySelector('h2, h3');
-                    const linkEl = article.querySelector('a');
-                    const previewEl = article.querySelector('p');
+            articles = []
+            for entry in feed.entries[:20]:  # Check last 20 entries
+                try:
+                    title = entry.title.lower()
+                    description = entry.get('description', '').lower()
                     
-                    if (titleEl && linkEl && previewEl) {
-                        const title = titleEl.textContent.trim();
-                        const url = linkEl.href;
-                        const preview = previewEl.textContent.trim();
+                    # Check if article is AI-related
+                    if any(keyword in title or keyword in description for keyword in AI_KEYWORDS):
+                        pub_date = parse_date(
+                            entry.get('published', entry.get('updated', '')),
+                            feed_info["date_format"]
+                        )
                         
-                        if (title.toLowerCase().includes('ai') || 
-                            preview.toLowerCase().includes('artificial intelligence') ||
-                            preview.toLowerCase().includes('machine learning')) {
-                            articles.push({title, url, preview});
-                        }
-                    }
-                });
-                return articles;
-            }''')
+                        articles.append({
+                            "title": entry.title,
+                            "url": entry.link,
+                            "summary": entry.get('description', '')[:200] + "..." 
+                                     if len(entry.get('description', '')) > 200 
+                                     else entry.get('description', ''),
+                            "source": name,
+                            "published": pub_date.isoformat()
+                        })
+                        logger.info(f"Found AI-related article from {name}: {entry.title}")
+                except Exception as e:
+                    logger.error(f"Error processing entry from {name}: {e}")
+                    continue
             
-            return [
-                {
-                    "title": article['title'],
-                    "url": article['url'],
-                    "summary": article['preview'][:200] + "..." if len(article['preview']) > 200 else article['preview'],
-                    "source": "Axios"
-                }
-                for article in articles[:3]  # Limit to 3 articles
-            ]
-            
-        finally:
-            await browser.close()
+            return articles[:3]  # Return up to 3 matching articles per source
             
     except Exception as e:
-        logger.error(f"Error scraping Axios: {e}", exc_info=True)
-        return []
-
-async def scrape_techcrunch() -> List[Dict]:
-    try:
-        logger.info("Starting TechCrunch scrape")
-        browser = await create_browser()
-        
-        try:
-            page = await browser.newPage()
-            await page.setUserAgent(random.choice(USER_AGENTS))
-            await page.setViewport({'width': 1920, 'height': 1080})
-            
-            await asyncio.sleep(random.uniform(2, 4))
-            
-            await page.goto('https://techcrunch.com/category/artificial-intelligence/', {
-                'waitUntil': 'networkidle0'
-            })
-            
-            articles = await page.evaluate('''() => {
-                const articles = [];
-                document.querySelectorAll('article').forEach(article => {
-                    const titleEl = article.querySelector('h2');
-                    const linkEl = article.querySelector('h2 a');
-                    const previewEl = article.querySelector('.post-block__content');
-                    
-                    if (titleEl && linkEl && previewEl) {
-                        articles.push({
-                            title: titleEl.textContent.trim(),
-                            url: linkEl.href,
-                            preview: previewEl.textContent.trim()
-                        });
-                    }
-                });
-                return articles;
-            }''')
-            
-            return [
-                {
-                    "title": article['title'],
-                    "url": article['url'],
-                    "summary": article['preview'][:200] + "..." if len(article['preview']) > 200 else article['preview'],
-                    "source": "TechCrunch"
-                }
-                for article in articles[:3]  # Limit to 3 articles
-            ]
-            
-        finally:
-            await browser.close()
-            
-    except Exception as e:
-        logger.error(f"Error scraping TechCrunch: {e}", exc_info=True)
+        logger.error(f"Error fetching {name} feed: {e}", exc_info=True)
         return []
 
 def filter_new_articles(articles: List[Dict]) -> List[Dict]:
     return [a for a in articles if a["url"] not in SCRAPED_URLS and not SCRAPED_URLS.add(a["url"])]
 
 async def scrape_all_sites() -> List[Dict]:
-    scrapers = [scrape_axios, scrape_techcrunch]
     all_articles = []
     
-    for scraper in scrapers:
-        try:
-            articles = await scraper()
+    async with aiohttp.ClientSession() as session:
+        tasks = [
+            fetch_feed(session, name, feed_info) 
+            for name, feed_info in RSS_FEEDS.items()
+        ]
+        
+        results = await asyncio.gather(*tasks)
+        for articles in results:
             all_articles.extend(articles)
-        except Exception as e:
-            logger.error(f"Error in scraper {scraper.__name__}: {e}")
     
-    return filter_new_articles(all_articles)
+    # Sort by publication date
+    all_articles.sort(
+        key=lambda x: datetime.fromisoformat(x['published']),
+        reverse=True
+    )
+    
+    filtered_articles = filter_new_articles(all_articles)
+    logger.info(f"Total new AI-related articles after filtering: {len(filtered_articles)}")
+    return filtered_articles
 
 async def main():
     results = await scrape_all_sites()
     for result in results:
-        logger.info(f"Title: {result['title']}\nURL: {result['url']}\nSummary: {result['summary']}\n")
+        logger.info(f"Title: {result['title']}\nSource: {result['source']}\n"
+                   f"Published: {result['published']}\nURL: {result['url']}\n"
+                   f"Summary: {result['summary']}\n")
 
 if __name__ == "__main__":
     asyncio.run(main())

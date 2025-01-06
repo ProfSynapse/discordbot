@@ -4,6 +4,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from .news_scraper import scrape_all_sites
+import discord
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,7 +46,7 @@ class ArticleScheduler:
                 await self._perform_scrape()
 
     async def _perform_scrape(self):
-        """Scrape articles and add them to queue in random chunks"""
+        """Scrape articles and add them to queue"""
         try:
             logger.info("Starting article scrape")
             new_articles = await scrape_all_sites()
@@ -55,14 +57,8 @@ class ArticleScheduler:
                 return
                 
             random.shuffle(new_articles)
-            
-            while new_articles:
-                chunk_size = random.randint(2, 3)
-                chunk = new_articles[:chunk_size]
-                new_articles = new_articles[chunk_size:]
-                self.articles_queue.extend(chunk)
-                
-            logger.info(f"Added {len(self.articles_queue)} articles to queue")
+            self.articles_queue.extend(new_articles)
+            logger.info(f"Added {len(new_articles)} articles to queue")
         except Exception as e:
             logger.error(f"Error during scrape: {e}", exc_info=True)
 
@@ -74,15 +70,23 @@ class ArticleScheduler:
                     article = self.articles_queue.pop(0)
                     channel = self.bot.get_channel(self.channel_id)
                     if channel:
-                        logger.info(f"Posting article: {article['title']}")
-                        await channel.send(
-                            f"📰 **New AI Article from {article['source']}**\n\n"
-                            f"**{article['title']}**\n\n"
-                            f"{article['summary']}\n\n"
-                            f"🔗 {article['url']}"
+                        # Create embed for better formatting
+                        embed = discord.Embed(
+                            title=article['title'],
+                            url=article['url'],
+                            description=article['summary'],
+                            color=discord.Color.blue()
                         )
+                        
+                        # Format the published date
+                        pub_date = datetime.fromisoformat(article['published'])
+                        embed.set_footer(text=f"Published {pub_date.strftime('%Y-%m-%d %H:%M')} • {article['source']}")
+                        
+                        logger.info(f"Posting article: {article['title']}")
+                        await channel.send(embed=embed)
                     else:
                         logger.error(f"Could not find channel with ID {self.channel_id}")
+                    
                     # Random delay between 30-90 minutes before next article
                     delay = random.randint(1800, 5400)
                     logger.info(f"Waiting {delay} seconds before next article")
