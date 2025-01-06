@@ -160,30 +160,36 @@ bot = DiscordBot()
 async def prof_command(interaction: discord.Interaction, *, prompt: str):
     await bot.prof(interaction, prompt=prompt)
 
-@bot.tree.command(name="image", description="Generate an image using DALL-E")
+@bot.tree.command(name="image", description="Generate an image using DALL-E (add --square, --portrait, or --wide to change format)")
 @commands.cooldown(1, 60, commands.BucketType.user)
 @app_commands.describe(
-    prompt="What would you like me to draw?",
-    size="Choose the image orientation/size"
+    prompt="What would you like me to draw? (add --square, --portrait, or --wide at the end)"
 )
 async def image_command(
     interaction: discord.Interaction, 
-    prompt: str,
-    size: app_commands.Choice[str] = app_commands.Choice(name="Square 1024x1024", value="square")
+    prompt: str
 ):
     """Generate an image using DALL-E 3"""
-    size_choices = [
-        app_commands.Choice(name="Square 1024x1024", value="square"),
-        app_commands.Choice(name="Portrait 1024x1792", value="portrait"),
-        app_commands.Choice(name="Landscape 1792x1024", value="landscape")
-    ]
+    # Parse size from flags in prompt
     size_map = {
-        "square": ImageSize.SQUARE,
-        "portrait": ImageSize.PORTRAIT,
-        "landscape": ImageSize.LANDSCAPE
+        "--square": ImageSize.SQUARE,
+        "--portrait": ImageSize.PORTRAIT,
+        "--wide": ImageSize.LANDSCAPE,
+        "--landscape": ImageSize.LANDSCAPE  # Alternative flag
     }
-    image_size = size_map.get(size.value, ImageSize.SQUARE)
-    await bot.generate_image(interaction, prompt, image_size)
+    
+    # Default to square if no flag found
+    image_size = ImageSize.SQUARE
+    clean_prompt = prompt
+    
+    # Check for size flags and remove from prompt
+    for flag, size in size_map.items():
+        if flag in prompt.lower():
+            image_size = size
+            clean_prompt = prompt.lower().replace(flag, "").strip()
+            break
+    
+    await bot.generate_image(interaction, clean_prompt, image_size)
 
 @bot.event
 async def on_ready():
