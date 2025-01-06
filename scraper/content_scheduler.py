@@ -9,6 +9,7 @@ import discord
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from config import config  # Changed from relative import
+import html  # Add this import at the top
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,7 +48,18 @@ class ContentScheduler:
             self.running = True
             await self._fetch_content()  # Fetch initial content
             
-            # Post a YouTube video immediately if available
+            # Post first news article if available
+            if self.news_queue:
+                article = self.news_queue.pop(0)
+                try:
+                    embed = self._create_news_embed(article)
+                    await self.news_channel.send(embed=embed)
+                    logger.info(f"Posted startup news article: {article['title']}")
+                except Exception as e:
+                    logger.error(f"Failed to post startup article: {e}")
+                    self.news_queue.insert(0, article)
+            
+            # Post first YouTube video if available
             if self.youtube_queue:
                 video = self.youtube_queue.pop(0)
                 try:
@@ -58,7 +70,6 @@ class ContentScheduler:
                     )
                     embed.set_image(url=video['thumbnail_url'])
                     embed.set_footer(text=f"Posted by {video['author']}")
-                    await self.youtube_channel.send("🎥 Latest AI-related video:")
                     await self.youtube_channel.send(embed=embed)
                     logger.info(f"Posted startup YouTube video: {video['title']}")
                 except Exception as e:
@@ -132,7 +143,7 @@ class ContentScheduler:
                             
                             self.youtube_queue.append({  # Use youtube_queue instead of articles_queue
                                 'type': 'youtube',
-                                'title': item['snippet']['title'],
+                                'title': html.unescape(item['snippet']['title']),  # Decode HTML entities
                                 'url': video_url,
                                 'author': channel_name,
                                 'thumbnail_url': item['snippet']['thumbnails']['high']['url'],
