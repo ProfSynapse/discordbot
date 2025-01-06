@@ -69,10 +69,13 @@ class DiscordBot(commands.Bot):
     async def prof(self, interaction: discord.Interaction, *, prompt: str):
         await interaction.response.defer()
         try:
+            # First, send the user's query as a message from the bot but mentioning the user
+            await interaction.followup.send(f"**{interaction.user.display_name} asks:**\n{prompt}")
+            
             # Get last 10 messages from the channel
             channel = interaction.channel
             messages = [msg async for msg in channel.history(limit=10)]
-            messages.reverse()  # Put in chronological order
+            messages.reverse()
             
             # Format message history
             context = "<recent_channel_conversation>\n"
@@ -90,7 +93,7 @@ class DiscordBot(commands.Bot):
             if not bot_response or bot_response.isspace():
                 raise APIResponseError("Empty response received from API")
 
-            # Send response in chunks without including the query
+            # Send response in chunks
             message_chunks = chunk_message_by_paragraphs(bot_response)
 
             for chunk in message_chunks:
