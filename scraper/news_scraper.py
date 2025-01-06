@@ -3,6 +3,8 @@ import requests
 from bs4 import BeautifulSoup
 import asyncio
 from typing import List, Dict
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -16,31 +18,33 @@ def filter_new_articles(articles: List[Dict]) -> List[Dict]:
     return [a for a in articles if a["url"] not in SCRAPED_URLS and not SCRAPED_URLS.add(a["url"])]
 
 async def scrape_axios() -> List[Dict]:
+    """Switch to Axios RSS feed instead of web scraping"""
     try:
         logger.info("Starting Axios scrape")
-        response = requests.get("https://www.axios.com/technology/automation-and-ai", headers=HEADERS)
-        response.raise_for_status()  # Raise exception for bad status codes
-        soup = BeautifulSoup(response.text, 'html.parser')
+        response = requests.get("https://www.axios.com/feed/", headers=HEADERS)
+        response.raise_for_status()
+        
+        rss = ET.fromstring(response.content)
         articles = []
         
-        article_elements = soup.select('article')
-        logger.info(f"Found {len(article_elements)} Axios articles")
-        
-        for article in article_elements[:5]:
+        # Get items with "artificial intelligence" or "AI" in title/description
+        for item in rss.findall('.//item')[:10]:
             try:
-                title = article.select_one('h2').text.strip()
-                url = article.select_one('a')['href']
-                preview = article.select_one('.description, .preview').text.strip()
+                title = item.find('title').text
+                url = item.find('link').text
+                description = item.find('description').text
                 
-                if all([title, url, preview]):
+                # Only include AI-related articles
+                if any(term.lower() in (title + description).lower() 
+                      for term in ['artificial intelligence', 'ai', 'machine learning']):
                     articles.append({
                         "title": title,
                         "url": url,
-                        "summary": preview[:200] + "..." if len(preview) > 200 else preview,
+                        "summary": description[:200] + "..." if len(description) > 200 else description,
                         "source": "Axios"
                     })
             except Exception as e:
-                logger.error(f"Error parsing Axios article: {e}", exc_info=True)
+                logger.error(f"Error parsing Axios RSS item: {e}", exc_info=True)
                 
         logger.info(f"Successfully scraped {len(articles)} Axios articles")
         return articles
@@ -51,31 +55,53 @@ async def scrape_axios() -> List[Dict]:
 async def scrape_arxiv() -> List[Dict]:
     try:
         logger.info("Starting arXiv scrape")
-        response = requests.get("https://arxiv.org/list/cs.AI/recent", headers=HEADERS)
+        
+        # Get papers from last 2 days only
+        days_ago = (datetime.now() - timedelta(days=2)).strftime('%Y%m%d')
+        base_url = "http://export.arxiv.org/api/query"
+        query_params = {
+            'search_query': 'cat:cs.AI+AND+submittedDate:[{}2359+TO+*]'.format(days_ago),
+            'sortBy': 'submittedDate',
+            'sortOrder': 'descending',
+            'max_results': 10
+        }
+        
+        response = requests.get(base_url, params=query_params, headers=HEADERS)
         response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        root = ET.fromstring(response.content)
         articles = []
+        ns = {'atom': 'http://www.w3.org/2005/Atom'}
         
-        article_elements = soup.select('.meta')
-        logger.info(f"Found {len(article_elements)} arXiv articles")
+        # Keywords to filter for more relevant papers
+        relevant_keywords = [
+            'large language model', 'llm', 'gpt', 'transformer',
+            'deep learning', 'neural network', 'machine learning',
+            'artificial intelligence', 'reinforcement learning', 'graph', 'knowledge graph', 'reasoning', 'diffusion', 'image', 'security', 'prompt engineering', 'security', 'ethics'
+        ]
         
-        for article in article_elements[:5]:
+        for entry in root.findall('atom:entry', ns)[:5]:
             try:
-                title = article.select_one('.title').text.replace("Title:", "").strip()
-                url = article.select_one('.list-identifier a')['href']
-                abstract = article.select_one('.abstract').text.strip()
+                title = entry.find('atom:title', ns).text.strip()
+                url = entry.find('atom:id', ns).text
+                abstract = entry.find('atom:summary', ns).text.strip()
                 
-                if all([title, url, abstract]):
+                # Check if the paper is relevant based on keywords
+                content = (title + ' ' + abstract).lower()
+                is_relevant = any(keyword in content for keyword in relevant_keywords)
+                
+                if all([title, url, abstract]) and is_relevant:
                     articles.append({
                         "title": title,
                         "url": url,
                         "summary": abstract[:200] + "..." if len(abstract) > 200 else abstract,
                         "source": "arXiv"
                     })
+                    logger.info(f"Found relevant arXiv paper: {title}")
             except Exception as e:
-                logger.error(f"Error parsing arXiv article: {e}", exc_info=True)
+                logger.error(f"Error parsing arXiv entry: {e}", exc_info=True)
                 
-        logger.info(f"Successfully scraped {len(articles)} arXiv articles")
+        logger.info(f"Successfully scraped {len(articles)} relevant arXiv articles")
         return articles
     except Exception as e:
         logger.error(f"Error scraping arXiv: {e}", exc_info=True)
