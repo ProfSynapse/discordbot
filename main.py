@@ -53,8 +53,18 @@ class DiscordBot(commands.Bot):
     async def setup_hook(self):
         """Initialize bot commands and scheduler on startup."""
         await self.tree.sync()
-        self.scheduler = ArticleScheduler(self, config.NEWS_CHANNEL_ID)
-        await self.scheduler.start()
+        await self.wait_until_ready()  # Wait until bot is ready
+        channel = self.get_channel(config.NEWS_CHANNEL_ID)
+        if not channel:
+            logger.error(f"Could not find news channel with ID {config.NEWS_CHANNEL_ID}")
+            logger.info("Available channels:")
+            for guild in self.guilds:
+                for channel in guild.channels:
+                    logger.info(f"- {channel.name}: {channel.id}")
+        else:
+            logger.info(f"Found news channel: {channel.name}")
+            self.scheduler = ArticleScheduler(self, config.NEWS_CHANNEL_ID)
+            await self.scheduler.start()
 
     async def close(self):
         """Cleanup on shutdown."""

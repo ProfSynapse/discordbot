@@ -51,14 +51,20 @@ def parse_date(date_str: str, format_type: str) -> datetime:
         if format_type == "rfc822":
             return parsedate_to_datetime(date_str)
         elif format_type == "arxiv":
-            # arXiv uses a different format
-            return datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC)
+            # Handle both arXiv formats
+            try:
+                # Try ISO format first
+                return datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC)
+            except ValueError:
+                # Try RFC822 format as fallback
+                return parsedate_to_datetime(date_str)
         else:
             # Fallback to RFC822
             return parsedate_to_datetime(date_str)
     except Exception as e:
         logging.error(f"Error parsing date {date_str}: {e}")
-        return datetime.min.replace(tzinfo=pytz.UTC)
+        # Return current time instead of min time for better sorting
+        return datetime.now(pytz.UTC)
 
 async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict) -> List[Dict]:
     try:

@@ -16,7 +16,15 @@ class ArticleScheduler:
         self.channel_id = channel_id
         self.articles_queue: List[Dict[str, Any]] = []
         self.running = False
-        logger.info(f"ArticleScheduler initialized with channel ID: {channel_id}")
+        self.channel = bot.get_channel(channel_id)
+        if not self.channel:
+            logger.error(f"Could not find channel with ID {channel_id}")
+            logger.info("Available channels:")
+            for guild in bot.guilds:
+                for channel in guild.channels:
+                    logger.info(f"- {channel.name}: {channel.id}")
+        else:
+            logger.info(f"Successfully initialized with channel: {self.channel.name}")
     
     async def start(self):
         """Start the scheduling loop"""
@@ -68,8 +76,9 @@ class ArticleScheduler:
             try:
                 if self.articles_queue:
                     article = self.articles_queue.pop(0)
-                    channel = self.bot.get_channel(self.channel_id)
-                    if channel:
+                    # Refresh channel reference
+                    self.channel = self.bot.get_channel(self.channel_id)
+                    if self.channel:
                         # Create embed for better formatting
                         embed = discord.Embed(
                             title=article['title'],
@@ -83,10 +92,11 @@ class ArticleScheduler:
                         embed.set_footer(text=f"Published {pub_date.strftime('%Y-%m-%d %H:%M')} • {article['source']}")
                         
                         logger.info(f"Posting article: {article['title']}")
-                        await channel.send(embed=embed)
+                        await self.channel.send(embed=embed)
                     else:
-                        logger.error(f"Could not find channel with ID {self.channel_id}")
-                    
+                        logger.error(f"Could not find channel with ID {self.channel_id}, skipping article")
+                        continue
+
                     # Random delay between 30-90 minutes before next article
                     delay = random.randint(1800, 5400)
                     logger.info(f"Waiting {delay} seconds before next article")
