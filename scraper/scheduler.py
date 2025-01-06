@@ -130,17 +130,35 @@ class ArticleScheduler:
                     # Refresh channel reference
                     self.channel = self.bot.get_channel(self.channel_id)
                     if self.channel:
-                        # Create embed for better formatting
+                        # Create embed with better formatting
                         embed = discord.Embed(
                             title=article['title'],
                             url=article['url'],
-                            description=article['summary'],
                             color=discord.Color.blue()
                         )
                         
-                        # Format the published date
-                        pub_date = datetime.fromisoformat(article['published'])
-                        embed.set_footer(text=f"Published {pub_date.strftime('%Y-%m-%d %H:%M')} • {article['source']}")
+                        # Clean and format the summary
+                        summary = article.get('summary', '').strip()
+                        if summary:
+                            # Remove HTML tags if present and truncate if needed
+                            summary = summary.replace('<p>', '').replace('</p>', '\n')
+                            if len(summary) > 1000:
+                                summary = summary[:997] + "..."
+                            embed.description = summary
+                        
+                        # Add source and clean up the date
+                        try:
+                            pub_date = datetime.fromisoformat(article['published'])
+                            date_str = pub_date.strftime('%Y-%m-%d %H:%M')
+                        except (ValueError, TypeError):
+                            date_str = "Unknown date"
+                        
+                        source = article.get('source', 'Unknown source')
+                        embed.set_footer(text=f"Published {date_str} • {source}")
+                        
+                        # Add image if present
+                        if 'image_url' in article and article['image_url']:
+                            embed.set_image(url=article['image_url'])
                         
                         logger.info(f"Posting article: {article['title']}")
                         await self.channel.send(embed=embed)
