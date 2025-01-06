@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any
 import aiohttp
 import asyncio
 import logging
+import json
 from config import config
 
 class GPTTrainerAPI:
@@ -78,15 +79,19 @@ class GPTTrainerAPI:
 
         Returns:
             str: The AI's response
-
-        Raises:
-            aiohttp.ClientError: If the API request fails
         """
-        endpoint = f'session/{session_uuid}/message/stream'
-        data = await self._make_request('POST', endpoint, json={
-            'query': f"{context}\nUser: {message}"
-        })
-        return data.get('response', '')
+        endpoint = f'session/{session_uuid}/message'  # Removed /stream
+        url = f'{self.base_url}/{endpoint}'
+        
+        async with self._lock:
+            async with self._session.post(
+                url,
+                headers=self.headers,
+                json={'query': f"{context}\nUser: {message}"}
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+                return data.get('response', "I apologize, but I couldn't generate a response at this time.")
 
     async def upload_data_source(self, url: str) -> bool:
         """Upload a new data source URL to the chatbot."""
