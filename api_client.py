@@ -10,6 +10,7 @@ import asyncio
 import logging
 import json
 from config import config
+from aiohttp import ClientError
 
 class GPTTrainerAPI:
     """
@@ -42,17 +43,30 @@ class GPTTrainerAPI:
             await self._session.close()
             self._session = None
 
-    async def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[Any, Any]:
+    async def _make_request(self, method: str, endpoint: str, retries: int = 3, **kwargs) -> Dict[Any, Any]:
+        """Make an API request with retry logic."""
         if not self._session:
             self._session = aiohttp.ClientSession()
 
         url = f'{self.base_url}/{endpoint}'
         kwargs['headers'] = self.headers
 
-        async with self._lock:  # Implement rate limiting
-            async with self._session.request(method, url, **kwargs) as response:
-                response.raise_for_status()
-                return await response.json()
+        for attempt in range(retries):
+            try:
+                async with self._lock:
+                    async with self._session.request(method, url, **kwargs) as response:
+                        if response.status == 500:
+                            if attempt < retries - 1:
+                                await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
+                                continue
+                        response.raise_for_status()
+                        return await response.json()
+            except ClientError as e:
+                if attempt < retries - 1:
+                    await asyncio.sleep(1 * (attempt + 1))
+                    continue
+                raise
+        raise ClientError(f"Failed after {retries} attempts")
 
     async def create_chat_session(self) -> str:
         """
@@ -69,29 +83,31 @@ class GPTTrainerAPI:
         return data['uuid']
 
     async def get_response(self, session_uuid: str, message: str, context: str = "") -> str:
-        """
-        Get an AI response for a user message.
-
-        Args:
-            session_uuid (str): The session UUID from create_chat_session
-            message (str): The user's message
-            context (str): Optional conversation context
-
-        Returns:
-            str: The AI's response
-        """
-        endpoint = f'session/{session_uuid}/message'  # Removed /stream
-        url = f'{self.base_url}/{endpoint}'
-        
-        async with self._lock:
-            async with self._session.post(
-                url,
-                headers=self.headers,
+        """Get an AI response with fallback options."""
+        try:
+            endpoint = f'session/{session_uuid}/message'
+            data = await self._make_request(
+                'POST', 
+                endpoint,
+                retries=3,
                 json={'query': f"{context}\nUser: {message}"}
-            ) as response:
-                response.raise_for_status()
-                data = await response.json()
+            )
+            return data.get('response', "I apologize, but I couldn't generate a response at this time.")
+        except Exception as e:
+            logging.error(f"Error getting response: {e}")
+            # Create new session and retry once on failure
+            try:
+                new_session_uuid = await self.create_chat_session()
+                data = await self._make_request(
+                    'POST',
+                    f'session/{new_session_uuid}/message',
+                    retries=2,
+                    json={'query': f"{context}\nUser: {message}"}
+                )
                 return data.get('response', "I apologize, but I couldn't generate a response at this time.")
+            except Exception as retry_error:
+                logging.error(f"Retry failed: {retry_error}")
+                return "I'm having trouble connecting to my brain right now. Please try again in a moment."
 
     async def upload_data_source(self, url: str) -> bool:
         """Upload a new data source URL to the chatbot."""
