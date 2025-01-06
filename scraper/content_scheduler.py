@@ -227,3 +227,19 @@ class ContentScheduler:
             
         except Exception as e:
             logger.error(f"Error during content fetch: {e}", exc_info=True)
+
+    async def _drip_content(self):
+        """Continuously drip articles from the queue."""
+        while self.running:
+            try:
+                if self.articles_queue:
+                    article = self.articles_queue.pop(0)
+                    # ...post article to channel or handle it here...
+                    logger.info(f"Dripped article: {article.get('title')}")
+                    await asyncio.sleep(random.randint(1800, 3600))  # between 30-60 min
+                else:
+                    logger.info("No articles in queue; sleeping 15 minutes.")
+                    await asyncio.sleep(900)
+            except Exception as e:
+                logger.error(f"Error in _drip_content: {e}", exc_info=True)
+                await asyncio.sleep(300)
