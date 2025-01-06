@@ -12,6 +12,18 @@ import json
 from config import config
 from aiohttp import ClientError
 
+class GPTTrainerAPIError(Exception):
+    """Base exception for API errors."""
+    pass
+
+class ServerError(GPTTrainerAPIError):
+    """Raised when the server returns a 5xx error."""
+    pass
+
+class APIResponseError(GPTTrainerAPIError):
+    """Raised when the API returns an unexpected response."""
+    pass
+
 class GPTTrainerAPI:
     """
     Asynchronous client for the GPT Trainer API service.
@@ -44,29 +56,44 @@ class GPTTrainerAPI:
             self._session = None
 
     async def _make_request(self, method: str, endpoint: str, retries: int = 3, **kwargs) -> Dict[Any, Any]:
-        """Make an API request with retry logic."""
+        """Make an API request with retry logic and detailed error handling."""
         if not self._session:
             self._session = aiohttp.ClientSession()
 
         url = f'{self.base_url}/{endpoint}'
         kwargs['headers'] = self.headers
+        last_error = None
 
         for attempt in range(retries):
             try:
                 async with self._lock:
                     async with self._session.request(method, url, **kwargs) as response:
-                        if response.status == 500:
+                        if response.status >= 500:
+                            last_error = ServerError(f"Server error: {response.status} - Attempt {attempt + 1}/{retries}")
                             if attempt < retries - 1:
-                                await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
+                                wait_time = (attempt + 1) * 2  # Exponential backoff
+                                logging.warning(f"{last_error}. Retrying in {wait_time}s...")
+                                await asyncio.sleep(wait_time)
                                 continue
+                            raise last_error
+                        
                         response.raise_for_status()
                         return await response.json()
+                        
+            except ServerError as e:
+                last_error = e
+                if attempt == retries - 1:
+                    raise
             except ClientError as e:
+                last_error = APIResponseError(f"API request failed: {str(e)}")
                 if attempt < retries - 1:
-                    await asyncio.sleep(1 * (attempt + 1))
+                    wait_time = (attempt + 1) * 2
+                    logging.warning(f"Request failed. Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
                     continue
-                raise
-        raise ClientError(f"Failed after {retries} attempts")
+                raise last_error
+
+        raise last_error or APIResponseError("Maximum retries exceeded")
 
     async def create_chat_session(self) -> str:
         """
@@ -83,7 +110,7 @@ class GPTTrainerAPI:
         return data['uuid']
 
     async def get_response(self, session_uuid: str, message: str, context: str = "") -> str:
-        """Get an AI response with fallback options."""
+        """Get an AI response with improved error handling."""
         try:
             endpoint = f'session/{session_uuid}/message'
             data = await self._make_request(
@@ -93,9 +120,11 @@ class GPTTrainerAPI:
                 json={'query': f"{context}\nUser: {message}"}
             )
             return data.get('response', "I apologize, but I couldn't generate a response at this time.")
-        except Exception as e:
-            logging.error(f"Error getting response: {e}")
-            # Create new session and retry once on failure
+        except ServerError as e:
+            logging.error(f"Server error in get_response: {e}")
+            return "I'm experiencing technical difficulties with my server. Please try again in a few minutes."
+        except APIResponseError as e:
+            logging.error(f"API error in get_response: {e}")
             try:
                 new_session_uuid = await self.create_chat_session()
                 data = await self._make_request(
@@ -107,7 +136,7 @@ class GPTTrainerAPI:
                 return data.get('response', "I apologize, but I couldn't generate a response at this time.")
             except Exception as retry_error:
                 logging.error(f"Retry failed: {retry_error}")
-                return "I'm having trouble connecting to my brain right now. Please try again in a moment."
+                return "I'm having trouble processing your request. Please try again in a moment."
 
     async def upload_data_source(self, url: str) -> bool:
         """Upload a new data source URL to the chatbot."""
