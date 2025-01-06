@@ -88,7 +88,7 @@ class DiscordBot(commands.Bot):
         await interaction.response.defer()
         try:
             # First, send the user's query as a message from the bot but mentioning the user
-            await interaction.followup.send(f"**{interaction.user.display_name} asks:**\n{prompt}")
+            await interaction.followup.send(f"**{interaction.user.display_name}:**\n{prompt}")
             
             # Get last 10 messages from the channel
             channel = interaction.channel
