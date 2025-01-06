@@ -172,15 +172,45 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                             logger.error(f"Date parsing error: {e}")
                             date_str = datetime.now(pytz.UTC).isoformat()
                         
-                        articles.append({
-                            "title": entry.title,
-                            "url": entry.link,
-                            "summary": summary,
-                            "source": name,
-                            "published": date_str,
-                            "image_url": image_url  # Now properly cleaned and verified
-                        })
-                        logger.info(f"Found AI-related article from {name}: {entry.title}")
+                        if feed_info["date_format"] == "arxiv":
+                            # Special handling for arXiv entries
+                            try:
+                                # Get authors
+                                authors = ', '.join([author.get('name', '') for author in entry.get('authors', [])])
+                                
+                                # Clean and format the summary/abstract
+                                summary = entry.get('summary', '').strip()
+                                if summary.lower().startswith('abstract:'):
+                                    summary = summary[9:].strip()  # Remove "Abstract:" prefix
+                                
+                                # Format date as YYYY-MM-DD
+                                formatted_date = date.strftime('%Y-%m-%d')
+                                
+                                # Create formatted summary with authors and date at the end
+                                formatted_summary = f"{summary}\n\n"
+                                formatted_summary += f"*{authors} - {formatted_date}*"
+                                
+                                articles.append({
+                                    "title": entry.title.replace('\n', ' ').strip(),
+                                    "url": entry.link,
+                                    "summary": formatted_summary,
+                                    "source": name,
+                                    "published": date_str,
+                                    "image_url": image_url
+                                })
+                            except Exception as e:
+                                logger.error(f"Error processing arXiv entry: {e}")
+                                continue
+                        else:
+                            articles.append({
+                                "title": entry.title,
+                                "url": entry.link,
+                                "summary": summary,
+                                "source": name,
+                                "published": date_str,
+                                "image_url": image_url  # Now properly cleaned and verified
+                            })
+                            logger.info(f"Found AI-related article from {name}: {entry.title}")
                 except Exception as e:
                     logger.error(f"Error processing entry from {name}: {e}")
                     continue
