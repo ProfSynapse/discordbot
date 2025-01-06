@@ -104,12 +104,13 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                         summary = entry['description']
                     
                     # Convert HTML to Discord-friendly markdown
-                    summary = md(summary, 
-                               heading_style="atx",  # Use # style headers
-                               strip=['script', 'style'],  # Remove these tags entirely
-                               convert=['b', 'i', 'em', 'strong', 'a'],  # Convert these tags to markdown
-                               escape_asterisks=True,
-                               escape_underscores=True)
+                    summary = md(
+                        summary,
+                        heading_style="atx",  # Use # style headers
+                        strip=['script', 'style'],  # Remove these tags entirely
+                        escape_asterisks=True,
+                        escape_underscores=True
+                    )
                     
                     # Clean up any extra whitespace
                     summary = re.sub(r'\n\s*\n\s*\n', '\n\n', summary)

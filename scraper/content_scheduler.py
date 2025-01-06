@@ -17,6 +17,7 @@ class ContentScheduler:
         "https://www.youtube.com/@OpenAI",
         "https://www.youtube.com/@GoogleDeepMind",
         "https://www.youtube.com/@SynapticLabs",
+        "https://www.youtube.com/@godago",
     ]
     
     def __init__(self, bot, news_channel_id: int, youtube_channel_id: int):
