@@ -3,6 +3,7 @@ import random
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
+from .news_scraper import scrape_all_sites  # Add this import
 from pytube import Channel, YouTube
 import re
 import discord
@@ -34,8 +35,9 @@ class ContentScheduler:
         try:
             self._initialize_channels()
             self.running = True
-            await self._fetch_all_content()
+            await self._fetch_content()  # Changed from _fetch_all_content
             self._start_tasks()
+            logger.info("Scheduler started successfully")
         except Exception as e:
             logger.error(f"Error starting scheduler: {e}", exc_info=True)
             self.running = False
@@ -89,15 +91,20 @@ class ContentScheduler:
         return None
 
     async def _get_recent_videos(self, channel: Channel) -> List[YouTube]:
+        """Get recent videos from channel"""
         videos = []
-        for video in channel.videos:
-            if len(videos) >= 5:
-                break
-            if self._is_recent(video.publish_date):
-                videos.append(video)
+        try:
+            for video in channel.videos:
+                if len(videos) >= 5:
+                    break
+                if self._is_recent(video.publish_date):
+                    videos.append(video)
+        except Exception as e:
+            logger.error(f"Error getting videos: {e}")
         return videos
 
     async def _process_videos(self, videos: List[YouTube], channel: Channel) -> int:
+        """Process videos and add to queue"""
         count = 0
         for video in videos:
             if video.watch_url in self.seen_videos:
@@ -118,6 +125,7 @@ class ContentScheduler:
                 })
                 self.seen_videos.add(video.watch_url)
                 count += 1
+                logger.info(f"Added video: {video.title}")
             except Exception as e:
                 logger.error(f"Error processing video: {e}")
         return count
@@ -167,3 +175,55 @@ class ContentScheduler:
         if isinstance(date_str, str) and date_str.endswith('+00:00'):
             return date_str[:-6]
         return date_str
+
+    async def _schedule_content(self):
+        """Schedule content fetching twice daily"""
+        while self.running:
+            try:
+                now = datetime.now()
+                next_run = now.replace(hour=18 if now.hour >= 6 and now.hour < 18 else 6,
+                                     minute=0, second=0, microsecond=0)
+                if next_run <= now:
+                    next_run += timedelta(days=1)
+                
+                await asyncio.sleep((next_run - now).seconds)
+                if self.running:
+                    await self._fetch_content()  # Changed from _fetch_all_content
+            except Exception as e:
+                logger.error(f"Error in content scheduler: {e}")
+                await asyncio.sleep(300)
+
+    async def _fetch_content(self):  # Renamed from _fetch_all_content
+        """Fetch both news articles and YouTube videos"""
+        try:
+            # Fetch news articles
+            logger.info("Fetching news articles...")
+            new_articles = await scrape_all_sites()
+            
+            # Filter for recent articles
+            recent_articles = [
+                article for article in new_articles
+                if self._is_recent(datetime.fromisoformat(article['published']))
+            ]
+            
+            if recent_articles:
+                random.shuffle(recent_articles)
+                self.articles_queue.extend(recent_articles)
+                logger.info(f"Added {len(recent_articles)} recent news articles to queue")
+            else:
+                logger.warning("No recent news articles found")
+            
+            # Fetch YouTube videos
+            youtube_count = await self._fetch_youtube_videos()
+            logger.info(f"Added {youtube_count} recent YouTube videos to queue")
+            
+            # Sort all content by date
+            if self.articles_queue:
+                self.articles_queue.sort(
+                    key=lambda x: datetime.fromisoformat(x.get('published', datetime.now().isoformat())),
+                    reverse=True
+                )
+                logger.info(f"Total recent items in queue after fetch: {len(self.articles_queue)}")
+            
+        except Exception as e:
+            logger.error(f"Error during content fetch: {e}", exc_info=True)
