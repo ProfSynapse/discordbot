@@ -20,8 +20,15 @@ from openai import OpenAI
 from enum import Enum
 from scraper.content_scraper import scrape_article_content
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+# Configure more detailed logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('bot.log')
+    ]
+)
 logger = logging.getLogger(__name__)
 
 class ImageSize(Enum):
@@ -52,19 +59,31 @@ class DiscordBot(commands.Bot):
         
     async def setup_hook(self):
         """Initialize bot commands and scheduler on startup."""
-        await self.tree.sync()
-        await self.wait_until_ready()  # Wait until bot is ready
-        channel = self.get_channel(config.NEWS_CHANNEL_ID)
-        if not channel:
-            logger.error(f"Could not find news channel with ID {config.NEWS_CHANNEL_ID}")
-            logger.info("Available channels:")
+        logger.info("Starting bot setup...")
+        try:
+            await self.tree.sync()
+            logger.info("Command tree synced")
+            
+            # Wait until bot is fully ready
+            await self.wait_until_ready()
+            logger.info(f"Bot is ready. Connected to {len(self.guilds)} guilds")
+            
+            # Debug guild and channel info
             for guild in self.guilds:
+                logger.info(f"Guild: {guild.name} (ID: {guild.id})")
                 for channel in guild.channels:
-                    logger.info(f"- {channel.name}: {channel.id}")
-        else:
-            logger.info(f"Found news channel: {channel.name}")
-            self.scheduler = ArticleScheduler(self, config.NEWS_CHANNEL_ID)
-            await self.scheduler.start()
+                    logger.info(f"- Channel: {channel.name} (ID: {channel.id})")
+            
+            channel = self.get_channel(config.NEWS_CHANNEL_ID)
+            if not channel:
+                logger.error(f"Could not find news channel with ID {config.NEWS_CHANNEL_ID}")
+            else:
+                logger.info(f"Found news channel: {channel.name}")
+                self.scheduler = ArticleScheduler(self, config.NEWS_CHANNEL_ID)
+                await self.scheduler.start()
+                logger.info("ArticleScheduler started successfully")
+        except Exception as e:
+            logger.error(f"Error in setup_hook: {e}", exc_info=True)
 
     async def close(self):
         """Cleanup on shutdown."""

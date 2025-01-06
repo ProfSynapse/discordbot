@@ -110,27 +110,41 @@ def filter_new_articles(articles: List[Dict]) -> List[Dict]:
     return [a for a in articles if a["url"] not in SCRAPED_URLS and not SCRAPED_URLS.add(a["url"])]
 
 async def scrape_all_sites() -> List[Dict]:
+    logger.info("Starting scrape_all_sites")
     all_articles = []
     
-    async with aiohttp.ClientSession() as session:
-        tasks = [
-            fetch_feed(session, name, feed_info) 
-            for name, feed_info in RSS_FEEDS.items()
-        ]
+    try:
+        async with aiohttp.ClientSession() as session:
+            tasks = [
+                fetch_feed(session, name, feed_info) 
+                for name, feed_info in RSS_FEEDS.items()
+            ]
+            
+            logger.info(f"Created {len(tasks)} scraping tasks")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for i, result in enumerate(results):
+                source = list(RSS_FEEDS.keys())[i]
+                if isinstance(result, Exception):
+                    logger.error(f"Error scraping {source}: {result}")
+                    continue
+                    
+                logger.info(f"Got {len(result)} articles from {source}")
+                all_articles.extend(result)
         
-        results = await asyncio.gather(*tasks)
-        for articles in results:
-            all_articles.extend(articles)
-    
-    # Sort by publication date
-    all_articles.sort(
-        key=lambda x: datetime.fromisoformat(x['published']),
-        reverse=True
-    )
-    
-    filtered_articles = filter_new_articles(all_articles)
-    logger.info(f"Total new AI-related articles after filtering: {len(filtered_articles)}")
-    return filtered_articles
+        # Sort by publication date
+        all_articles.sort(
+            key=lambda x: datetime.fromisoformat(x['published']),
+            reverse=True
+        )
+        
+        filtered_articles = filter_new_articles(all_articles)
+        logger.info(f"Total articles: {len(all_articles)}, After filtering: {len(filtered_articles)}")
+        return filtered_articles
+        
+    except Exception as e:
+        logger.error(f"Error in scrape_all_sites: {e}", exc_info=True)
+        return []
 
 async def main():
     results = await scrape_all_sites()

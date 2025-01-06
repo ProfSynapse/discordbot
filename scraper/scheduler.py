@@ -16,24 +16,37 @@ class ArticleScheduler:
         self.channel_id = channel_id
         self.articles_queue: List[Dict[str, Any]] = []
         self.running = False
+        
+        # Debug initialization
+        logger.info(f"Initializing ArticleScheduler with channel ID: {channel_id}")
         self.channel = bot.get_channel(channel_id)
         if not self.channel:
-            logger.error(f"Could not find channel with ID {channel_id}")
+            logger.error(f"Could not find channel {channel_id}")
             logger.info("Available channels:")
             for guild in bot.guilds:
+                logger.info(f"Guild: {guild.name}")
                 for channel in guild.channels:
                     logger.info(f"- {channel.name}: {channel.id}")
         else:
-            logger.info(f"Successfully initialized with channel: {self.channel.name}")
+            logger.info(f"Found channel: {self.channel.name}")
     
     async def start(self):
         """Start the scheduling loop"""
-        self.running = True
         logger.info("Starting ArticleScheduler")
-        # Immediate first scrape
-        await self._perform_scrape()
-        asyncio.create_task(self._schedule_scrapes())
-        asyncio.create_task(self._drip_articles())
+        self.running = True
+        
+        try:
+            # Immediate first scrape
+            logger.info("Performing initial scrape")
+            await self._perform_scrape()
+            
+            # Start background tasks
+            logger.info("Starting scheduler tasks")
+            asyncio.create_task(self._schedule_scrapes())
+            asyncio.create_task(self._drip_articles())
+            logger.info("Scheduler tasks started")
+        except Exception as e:
+            logger.error(f"Error starting scheduler: {e}", exc_info=True)
     
     async def stop(self):
         """Stop the scheduling loop"""
