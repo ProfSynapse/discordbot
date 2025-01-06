@@ -28,10 +28,13 @@ class ContentScheduler:
         self.bot = bot
         self.news_channel_id = news_channel_id
         self.youtube_channel_id = youtube_channel_id
-        self.articles_queue: List[Dict[str, Any]] = []
+        self.news_queue: List[Dict[str, Any]] = []  # Separate queue for news
+        self.youtube_queue: List[Dict[str, Any]] = []  # Separate queue for YouTube
+        self.articles_queue = []  # Remove this or keep for backwards compatibility
         self.running = False
         self._schedule_task = None
-        self._drip_task = None
+        self._news_drip_task = None
+        self._youtube_drip_task = None
         self.seen_videos = set()
         self.news_channel = None
         self.youtube_channel = None
@@ -57,13 +60,15 @@ class ContentScheduler:
             raise ValueError("One or more channels not found")
 
     def _start_tasks(self) -> None:
+        """Start separate tasks for news and YouTube content"""
         self._schedule_task = asyncio.create_task(self._schedule_content())
-        self._drip_task = asyncio.create_task(self._drip_content())
+        self._news_drip_task = asyncio.create_task(self._drip_news())
+        self._youtube_drip_task = asyncio.create_task(self._drip_youtube())
         asyncio.create_task(self._monitor_tasks())
 
     async def stop(self) -> None:
         self.running = False
-        for task in [self._schedule_task, self._drip_task]:
+        for task in [self._schedule_task, self._news_drip_task, self._youtube_drip_task]:
             if task:
                 task.cancel()
 
@@ -106,7 +111,7 @@ class ContentScheduler:
                             if not self._is_recent(published):
                                 continue
                             
-                            self.articles_queue.append({
+                            self.youtube_queue.append({  # Use youtube_queue instead of articles_queue
                                 'type': 'youtube',
                                 'title': item['snippet']['title'],
                                 'url': video_url,
@@ -212,7 +217,7 @@ class ContentScheduler:
                 await asyncio.sleep(300)
 
     async def _fetch_content(self):  # Renamed from _fetch_all_content
-        """Fetch both news articles and YouTube videos"""
+        """Fetch both news articles and YouTube videos into separate queues"""
         try:
             # Fetch news articles
             logger.info("Fetching news articles...")
@@ -221,84 +226,137 @@ class ContentScheduler:
             filtered_articles = [a for a in new_articles if self._is_new_and_recent(a)]
             if filtered_articles:
                 random.shuffle(filtered_articles)
-                self.articles_queue.extend(filtered_articles)
-                logger.info(f"Added {len(filtered_articles)} filtered articles to queue")
+                self.news_queue.extend(filtered_articles)
+                logger.info(f"Added {len(filtered_articles)} filtered articles to news queue")
             
             # Fetch YouTube videos
             youtube_count = await self._fetch_youtube_videos()
-            logger.info(f"Added {youtube_count} recent YouTube videos to queue")
-            
-            # Sort all content by date
-            if self.articles_queue:
-                self.articles_queue.sort(
-                    key=lambda x: datetime.fromisoformat(x.get('published', datetime.now().isoformat())),
-                    reverse=True
-                )
-                logger.info(f"Total recent items in queue after fetch: {len(self.articles_queue)}")
+            logger.info(f"Added {youtube_count} recent YouTube videos to YouTube queue")
             
         except Exception as e:
             logger.error(f"Error during content fetch: {e}", exc_info=True)
 
-    async def _drip_content(self):
-        """Continuously drip articles and videos to respective channels."""
+    async def _drip_news(self):
+        """Distribute news articles evenly across the time window until next fetch"""
         while self.running:
             try:
-                if self.articles_queue:
-                    content = self.articles_queue.pop(0)
+                if self.news_queue:
+                    # Calculate time until next fetch (roughly 12 hours)
+                    now = datetime.now()
+                    next_fetch = now.replace(
+                        hour=18 if now.hour < 18 else 6,
+                        minute=0, second=0, microsecond=0
+                    )
+                    if next_fetch <= now:
+                        next_fetch += timedelta(days=1)
                     
-                    # Handle different content types
-                    if content.get('type') == 'youtube':
-                        # Post to YouTube channel
-                        if self.youtube_channel:
-                            embed = discord.Embed(
-                                title=content['title'],
-                                url=content['url'],
-                                color=discord.Color.red()
-                            )
-                            embed.set_image(url=content['thumbnail_url'])
-                            embed.set_footer(text=f"Posted by {content['author']}")
-                            
+                    time_window = (next_fetch - now).total_seconds()
+                    items_to_post = len(self.news_queue)
+                    
+                    if items_to_post > 0:
+                        # Calculate average delay between posts
+                        base_delay = time_window / items_to_post
+                        
+                        # Add randomness but keep within reasonable bounds
+                        delay = random.uniform(base_delay * 0.7, base_delay * 1.3)
+                        logger.info(f"News: Waiting {delay/60:.1f} minutes until next post")
+                        
+                        await asyncio.sleep(delay)
+                        
+                        if self.news_channel and self.news_queue:
+                            article = self.news_queue.pop(0)
                             try:
-                                await self.youtube_channel.send(embed=embed)
-                                logger.info(f"Posted YouTube video: {content['title']}")
-                            except Exception as e:
-                                logger.error(f"Failed to post YouTube video: {e}")
-                                # Put it back in queue if failed
-                                self.articles_queue.insert(0, content)
-                    else:
-                        # Post news article
-                        if self.news_channel:
-                            try:
-                                embed = self._create_news_embed(content)
+                                embed = self._create_news_embed(article)
                                 await self.news_channel.send(embed=embed)
-                                logger.info(f"Posted article: {content['title']}")
+                                logger.info(f"Posted article: {article['title']}")
                             except Exception as e:
                                 logger.error(f"Failed to post article: {e}")
-                                # Put it back in queue if failed
-                                self.articles_queue.insert(0, content)
-                    
-                    await asyncio.sleep(random.randint(1800, 3600))  # between 30-60 min
+                                self.news_queue.insert(0, article)
+                    else:
+                        await asyncio.sleep(300)  # Check every 5 minutes if queue empty
                 else:
-                    logger.info("No content in queue; sleeping 15 minutes.")
-                    await asyncio.sleep(900)
+                    await asyncio.sleep(300)
+                    
             except Exception as e:
-                logger.error(f"Error in _drip_content: {e}", exc_info=True)
+                logger.error(f"Error in news drip: {e}")
+                await asyncio.sleep(300)
+
+    async def _drip_youtube(self):
+        """Distribute YouTube videos evenly across the time window until next fetch"""
+        while self.running:
+            try:
+                if self.youtube_queue:
+                    # Calculate time until next fetch (roughly 12 hours)
+                    now = datetime.now()
+                    next_fetch = now.replace(
+                        hour=18 if now.hour < 18 else 6,
+                        minute=0, second=0, microsecond=0
+                    )
+                    if next_fetch <= now:
+                        next_fetch += timedelta(days=1)
+                    
+                    time_window = (next_fetch - now).total_seconds()
+                    items_to_post = len(self.youtube_queue)
+                    
+                    if items_to_post > 0:
+                        # Calculate average delay between posts
+                        base_delay = time_window / items_to_post
+                        
+                        # Add randomness but keep within reasonable bounds
+                        delay = random.uniform(base_delay * 0.7, base_delay * 1.3)
+                        logger.info(f"YouTube: Waiting {delay/60:.1f} minutes until next post")
+                        
+                        await asyncio.sleep(delay)
+                        
+                        if self.youtube_channel and self.youtube_queue:
+                            video = self.youtube_queue.pop(0)
+                            try:
+                                embed = discord.Embed(
+                                    title=video['title'],
+                                    url=video['url'],
+                                    color=discord.Color.red()
+                                )
+                                embed.set_image(url=video['thumbnail_url'])
+                                embed.set_footer(text=f"Posted by {video['author']}")
+                                await self.youtube_channel.send(embed=embed)
+                                logger.info(f"Posted YouTube video: {video['title']}")
+                            except Exception as e:
+                                logger.error(f"Failed to post video: {e}")
+                                self.youtube_queue.insert(0, video)
+                    else:
+                        await asyncio.sleep(300)  # Check every 5 minutes if queue empty
+                else:
+                    await asyncio.sleep(300)
+                    
+            except Exception as e:
+                logger.error(f"Error in YouTube drip: {e}")
                 await asyncio.sleep(300)
 
     async def _monitor_tasks(self):
-        """Monitor background tasks for errors and restart if needed."""
+        """Monitor all tasks for errors and restart if needed."""
         while self.running:
             try:
-                for task in [self._schedule_task, self._drip_task]:
+                tasks = [
+                    (self._schedule_task, self._schedule_content),
+                    (self._news_drip_task, self._drip_news),
+                    (self._youtube_drip_task, self._drip_youtube)
+                ]
+                
+                for task, restart_func in tasks:
                     if task and task.done() and not task.cancelled():
                         if task.exception():
                             logger.error(f"Task failed: {task.exception()}")
                             # Restart failed task
                             if task == self._schedule_task:
-                                self._schedule_task = asyncio.create_task(self._schedule_content())
-                            elif task == self._drip_task:
-                                self._drip_task = asyncio.create_task(self._drip_content())
+                                self._schedule_task = asyncio.create_task(restart_func())
+                            elif task == self._news_drip_task:
+                                self._news_drip_task = asyncio.create_task(restart_func())
+                            elif task == self._youtube_drip_task:
+                                self._youtube_drip_task = asyncio.create_task(restart_func())
+                                
                 await asyncio.sleep(60)  # Check every minute
             except Exception as e:
                 logger.error(f"Error in task monitor: {e}")
-                await asyncio.sleep(60)  # Wait a minute before trying again
+                await asyncio.sleep(60)
+
+    # ...rest of existing code...

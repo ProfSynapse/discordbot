@@ -88,6 +88,7 @@ def parse_date(date_str: str, format_type: str) -> datetime:
         # Return current time instead of min time for better sorting
         return datetime.now(pytz.UTC)
 
+# Fix the keyword error in fetch_feed function
 async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict) -> List[Dict]:
     try:
         logger.info(f"Fetching {name} RSS feed")
@@ -108,6 +109,7 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                         summary,
                         heading_style="atx",  # Use # style headers
                         strip=['script', 'style'],  # Remove these tags entirely
+                        convert=['b', 'i', 'em', 'strong', 'a', 'img'],  # Added 'img' to conversion
                         escape_asterisks=True,
                         escape_underscores=True
                     )
@@ -156,8 +158,8 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                     summary = summary.strip()
                     
                     # Check if article is AI-related
-                    if any(keyword in entry.title.lower() or keyword in summary.lower() 
-                          for keyword in AI_KEYWORDS):
+                    if any(kw in entry.title.lower() or kw in summary.lower() 
+                          for kw in AI_KEYWORDS):
                         # Parse date with correct format type
                         try:
                             date = parse_date(
@@ -175,7 +177,7 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                             "summary": summary,
                             "source": name,
                             "published": date_str,
-                            "image_url": image_url
+                            "image_url": image_url  # Now properly cleaned and verified
                         })
                         logger.info(f"Found AI-related article from {name}: {entry.title}")
                 except Exception as e:
@@ -212,19 +214,19 @@ async def scrape_all_sites() -> List[Dict]:
                     
                 logger.info(f"Got {len(result)} articles from {source}")
                 all_articles.extend(result)
-        
-        # Sort by publication date
-        try:
-            all_articles.sort(
-                key=lambda x: datetime.fromisoformat(x.get('published', datetime.now(pytz.UTC).isoformat())),
-                reverse=True
-            )
-        except Exception as e:
-            logger.error(f"Error sorting articles: {e}")
-        
-        # Return all_articles directly now:
-        return all_articles
-        
+                
+            # Sort by publication date
+            try:
+                all_articles.sort(
+                    key=lambda x: datetime.fromisoformat(x.get('published', datetime.now(pytz.UTC).isoformat())),
+                    reverse=True
+                )
+            except Exception as e:
+                logger.error(f"Error sorting articles: {e}")
+            
+            # Return all_articles directly now:
+            return all_articles
+            
     except Exception as e:
         logger.error(f"Error in scrape_all_sites: {e}", exc_info=True)
         return []
