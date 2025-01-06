@@ -180,18 +180,24 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                                 
                                 # Clean and format the summary/abstract
                                 summary = entry.get('summary', '').strip()
-                                if summary.lower().startswith('abstract:'):
-                                    summary = summary[9:].strip()  # Remove "Abstract:" prefix
+                                
+                                # Remove Announce Type and arXiv ID prefixes
+                                summary = re.sub(r'arXiv:\d+\.\d+v\d+\s+Announce Type:\s+\w+\s*', '', summary)
+                                summary = re.sub(r'Abstract:\s*', '', summary)
                                 
                                 # Format date as YYYY-MM-DD
                                 formatted_date = date.strftime('%Y-%m-%d')
                                 
-                                # Create formatted summary with authors and date at the end
-                                formatted_summary = f"{summary}\n\n"
-                                formatted_summary += f"*{authors} - {formatted_date}*"
+                                # Create clean formatted summary
+                                formatted_summary = f"{summary.strip()}\n\n"  # Abstract first
+                                formatted_summary += f"*{authors} - {formatted_date}*"  # Authors and date in italics
+                                
+                                # Clean up title (remove any arXiv IDs or other prefixes)
+                                clean_title = re.sub(r'arXiv:\d+\.\d+v\d+\s*', '', entry.title)
+                                clean_title = clean_title.replace('\n', ' ').strip()
                                 
                                 articles.append({
-                                    "title": entry.title.replace('\n', ' ').strip(),
+                                    "title": clean_title,
                                     "url": entry.link,
                                     "summary": formatted_summary,
                                     "source": name,
