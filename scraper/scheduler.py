@@ -19,35 +19,40 @@ class ArticleScheduler:
         
         # Debug initialization
         logger.info(f"Initializing ArticleScheduler with channel ID: {channel_id}")
-        self.channel = bot.get_channel(channel_id)
+        self.channel = self.bot.get_channel(channel_id)
         if not self.channel:
             logger.error(f"Could not find channel {channel_id}")
             logger.info("Available channels:")
-            for guild in bot.guilds:
+            for guild in self.bot.guilds:
                 logger.info(f"Guild: {guild.name}")
                 for channel in guild.channels:
-                    logger.info(f"- {channel.name}: {channel.id}")
-        else:
-            logger.info(f"Found channel: {self.channel.name}")
-    
+                    if isinstance(channel, discord.TextChannel):
+                        logger.info(f"- #{channel.name}: {channel.id}")
+            raise ValueError(f"Channel {channel_id} not found")
+        
+        logger.info(f"Successfully initialized with channel: #{self.channel.name}")
+
     async def start(self):
         """Start the scheduling loop"""
-        logger.info("Starting ArticleScheduler")
-        self.running = True
-        
         try:
+            self.running = True
+            logger.info("Starting ArticleScheduler")
+            
             # Immediate first scrape
             logger.info("Performing initial scrape")
             await self._perform_scrape()
             
             # Start background tasks
             logger.info("Starting scheduler tasks")
-            asyncio.create_task(self._schedule_scrapes())
-            asyncio.create_task(self._drip_articles())
+            self._schedule_task = asyncio.create_task(self._schedule_scrapes())
+            self._drip_task = asyncio.create_task(self._drip_articles())
             logger.info("Scheduler tasks started")
+            
         except Exception as e:
             logger.error(f"Error starting scheduler: {e}", exc_info=True)
-    
+            self.running = False
+            raise
+
     async def stop(self):
         """Stop the scheduling loop"""
         self.running = False
