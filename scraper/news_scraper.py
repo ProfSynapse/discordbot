@@ -104,19 +104,20 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                     if not summary and 'description' in entry:
                         summary = entry['description']
                     
-                    # Convert HTML to Discord-friendly markdown
+                    # Convert HTML to Discord-friendly markdown - fixed markdownify params
                     summary = md(
                         summary,
-                        heading_style="atx",  # Use # style headers
-                        strip=['script', 'style'],  # Remove these tags entirely
-                        convert=['b', 'i', 'em', 'strong', 'a', 'img'],  # Added 'img' to conversion
+                        heading_style="atx",
+                        convert=['b', 'i', 'em', 'strong', 'a', 'img', 'p', 'br', 'ul', 'ol', 'li'],  # Specify all tags to convert
                         escape_asterisks=True,
                         escape_underscores=True
                     )
                     
-                    # Clean up any extra whitespace
-                    summary = re.sub(r'\n\s*\n\s*\n', '\n\n', summary)
-                    summary = summary.strip()
+                    # Clean up the converted markdown
+                    summary = (summary
+                              .replace('\n\n\n', '\n\n')  # Remove triple newlines
+                              .replace('!\[\]', '')        # Remove empty image markers
+                              .strip())                    # Remove leading/trailing whitespace
                     
                     # Extract image URL from HTML content
                     image_url = None

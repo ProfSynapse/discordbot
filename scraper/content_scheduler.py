@@ -45,7 +45,26 @@ class ContentScheduler:
         try:
             self._initialize_channels()
             self.running = True
-            await self._fetch_content()  # Changed from _fetch_all_content
+            await self._fetch_content()  # Fetch initial content
+            
+            # Post a YouTube video immediately if available
+            if self.youtube_queue:
+                video = self.youtube_queue.pop(0)
+                try:
+                    embed = discord.Embed(
+                        title=video['title'],
+                        url=video['url'],
+                        color=discord.Color.red()
+                    )
+                    embed.set_image(url=video['thumbnail_url'])
+                    embed.set_footer(text=f"Posted by {video['author']}")
+                    await self.youtube_channel.send("🎥 Latest AI-related video:")
+                    await self.youtube_channel.send(embed=embed)
+                    logger.info(f"Posted startup YouTube video: {video['title']}")
+                except Exception as e:
+                    logger.error(f"Failed to post startup video: {e}")
+                    self.youtube_queue.insert(0, video)
+            
             self._start_tasks()
             logger.info("Scheduler started successfully")
         except Exception as e:
