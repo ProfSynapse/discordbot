@@ -1,8 +1,21 @@
+"""
+Main Discord bot module that handles all Discord-specific functionality.
+This bot integrates with GPT Trainer API to provide conversational AI capabilities
+and manages URL-based knowledge base updates.
+
+Features:
+- Chat with AI using /prof command
+- Process and summarize URLs using /sum command
+- Automatic URL detection and processing
+- Message chunking for large responses
+- Rate limiting and error handling
+"""
+
 import discord
 from discord.ext import commands
 from discord import app_commands
 import os
-from discord_api import create_chat_session, gpt_response
+from api_client import api_client
 import textwrap
 import logging
 from conversation_history import update_conversation_history, get_user_context
@@ -10,17 +23,92 @@ from data_source import upload_data_source
 import datetime
 from bs4 import BeautifulSoup
 import requests
+import asyncio
+from config import config
+from scraper.scheduler import ArticleScheduler
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
-DISCORD_TOKEN = os.environ['DISCORD_TOKEN']
-GPT_TRAINER_TOKEN = os.environ['GPT_TRAINER_TOKEN']
-CHATBOT_UUID = os.environ['CHATBOT_UUID']
+class DiscordBot(commands.Bot):
+    """
+    Custom Discord bot implementation with AI chat capabilities.
+    Inherits from commands.Bot and adds custom command handling and API integration.
+    """
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix='/', intents=intents)
+        self.scheduler = None
+        
+    async def setup_hook(self):
+        """Initialize bot commands and scheduler on startup."""
+        await self.tree.sync()
+        self.scheduler = ArticleScheduler(self, config.NEWS_CHANNEL_ID)
+        await self.scheduler.start()
 
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='/', intents=intents)
+    async def close(self):
+        """Cleanup on shutdown."""
+        if self.scheduler:
+            await self.scheduler.stop()
+        await super().close()
+
+    async def on_command_error(self, ctx, error):
+        if isinstance(error, commands.CommandOnCooldown):
+            await ctx.send(f"Please wait {error.retry_after:.2f}s before using this command again.")
+        else:
+            logging.error(f"Command error: {error}")
+            await ctx.send("An error occurred while processing your command.")
+
+    async def process_data_source(self, message):
+        """
+        Process a message containing a URL and add it to the bot's knowledge base.
+        
+        Args:
+            message (discord.Message): The message containing the URL to process
+        """
+        url = extract_url(message.content)
+        if url:
+            async with api_client as client:
+                if await client.upload_data_source(url):
+                    await message.channel.send(f"Data source '{url}' has been added to the bot's knowledge base.")
+                else:
+                    await message.channel.send("An error occurred while uploading the data source.")
+        else:
+            await message.channel.send("No valid URL found in the message.")
+
+    @bot.tree.command(name="prof", description="Chat with Professor Synapse")
+    @commands.cooldown(1, 60, commands.BucketType.user)  # Rate limit: 1 use per minute per user
+    async def prof(self, interaction: discord.Interaction, *, prompt: str):
+        await interaction.response.defer()
+        try:
+            user_id = str(interaction.user.id)
+            user_context = get_user_context(user_id)
+            
+            async with api_client as client:
+                session_uuid = await client.create_chat_session()
+                bot_response = await client.get_response(session_uuid, prompt, user_context)
+
+            # Update the conversation history with the user's prompt
+            update_conversation_history(user_id, f"User: {prompt}")
+
+            # Update the conversation history with the bot's response
+            update_conversation_history(user_id, f"Assistant: {bot_response}")
+
+            # Combine the query and the response
+            full_message = f"**Query:**\n{prompt}\n\n{bot_response}"
+            message_chunks = chunk_message_by_paragraphs(full_message)
+
+            # Send each chunk as a separate message
+            for chunk in message_chunks:
+                await interaction.followup.send(chunk)
+
+        except Exception as e:
+            logging.error(f"An error occurred: {str(e)}")
+            await interaction.followup.send("An error occurred while processing your request. Please try again later.")
+
+# Create bot instance
+bot = DiscordBot()
 
 @bot.event
 async def on_ready():
@@ -94,67 +182,35 @@ async def on_reaction_add(reaction, user):
     if reaction.emoji == "📚":  # Check if the reaction is the book emoji
         await process_data_source(reaction.message)
 
-async def process_data_source(message):
-    # Extract the URL from the message content
-    url = extract_url(message.content)
-
-    if url:
+# Add error handling decorator for background tasks
+def with_error_handling(func):
+    async def wrapper(*args, **kwargs):
         try:
-            # Upload the data source to the bot's knowledge base
-            upload_data_source(url)
-            await message.channel.send(f"Data source '{url}' has been added to the bot's knowledge base.")
+            return await func(*args, **kwargs)
         except Exception as e:
-            logging.error(f"Error uploading data source: {str(e)}")
-            await message.channel.send("An error occurred while uploading the data source.")
-    else:
-        await message.channel.send("No valid URL found in the message.")
+            logging.error(f"Error in background task {func.__name__}: {e}")
+    return wrapper
+
+@with_error_handling
+async def process_data_source(message):
+    await bot.process_data_source(message)
 
 def extract_url(message_content):
+    """
+    Extract the first URL found in a message.
+
+    Args:
+        message_content (str): The message content to search
+
+    Returns:
+        str|None: The first URL found or None if no URL is present
+    """
     # Extract the first URL from the message content
     words = message_content.split()
     for word in words:
         if word.startswith("http://") or word.startswith("https://"):
             return word
     return None
-
-@bot.tree.command(name="prof", description="Chat with Professor Synapse")
-async def prof(interaction: discord.Interaction, *, prompt: str):
-    """
-    Slash command to interact with the GPT Trainer API and generate a response.
-
-    Args:
-        interaction (discord.Interaction): The interaction object representing the command invocation.
-        prompt (str): The user's input prompt.
-    """
-    await interaction.response.defer()
-    try:
-        # Get the user's ID
-        user_id = str(interaction.user.id)
-
-        # Get the user's context based on their conversation history
-        user_context = get_user_context(user_id)
-
-        # Update the conversation history with the user's prompt
-        update_conversation_history(user_id, f"User: {prompt}")
-
-        # Create a chat session and get the response
-        session_uuid = create_chat_session()
-        bot_response = gpt_response(session_uuid, f"{user_context}\nUser: {prompt}")
-
-        # Update the conversation history with the bot's response
-        update_conversation_history(user_id, f"Assistant: {bot_response}")
-
-        # Combine the query and the response
-        full_message = f"**Query:**\n{prompt}\n\n{bot_response}"
-        message_chunks = chunk_message_by_paragraphs(full_message)
-
-        # Send each chunk as a separate message
-        for chunk in message_chunks:
-            await interaction.followup.send(chunk)
-
-    except Exception as e:
-        logging.error(f"An error occurred: {str(e)}")
-        await interaction.followup.send("An error occurred while processing your request. Please try again later.")
 
 def get_metadata(url):
     try:
@@ -206,4 +262,5 @@ async def sum(interaction: discord.Interaction):
         logging.exception(f"Error occurred in /sum command: {str(e)}")
         await interaction.followup.send("An error occurred while processing the /sum command. Please check the bot logs for more information.")
 
-bot.run(DISCORD_TOKEN)
+if __name__ == "__main__":
+    bot.run(config.DISCORD_TOKEN)
