@@ -118,7 +118,7 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                     logger.error(f"Error processing entry from {name}: {e}")
                     continue
             
-            return articles[:3]  # Return up to 3 matching articles per source
+            return articles[5]  # Return up to 3 matching articles per source
             
     except Exception as e:
         logger.error(f"Error fetching {name} feed: {e}", exc_info=True)
