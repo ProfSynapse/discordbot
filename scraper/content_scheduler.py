@@ -74,15 +74,19 @@ class ContentScheduler:
         try:
             for channel_name, channel_id in self.YOUTUBE_CHANNELS.items():
                 try:
-                    # Get channel's recent uploads
-                    response = await asyncio.to_thread(
-                        self.youtube.search().list,
+                    # Create the search request
+                    request = self.youtube.search().list(
                         part="snippet",
                         channelId=channel_id,
                         order="date",
                         maxResults=5,
                         type="video"
-                    ).execute()
+                    )
+                    
+                    # Execute the request in a thread pool
+                    response = await asyncio.get_event_loop().run_in_executor(
+                        None, request.execute
+                    )
                     
                     for item in response.get('items', []):
                         try:
