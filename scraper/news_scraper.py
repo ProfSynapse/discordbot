@@ -17,11 +17,16 @@ def filter_new_articles(articles: List[Dict]) -> List[Dict]:
 
 async def scrape_axios() -> List[Dict]:
     try:
+        logger.info("Starting Axios scrape")
         response = requests.get("https://www.axios.com/technology/automation-and-ai", headers=HEADERS)
+        response.raise_for_status()  # Raise exception for bad status codes
         soup = BeautifulSoup(response.text, 'html.parser')
         articles = []
         
-        for article in soup.select('article')[:5]:
+        article_elements = soup.select('article')
+        logger.info(f"Found {len(article_elements)} Axios articles")
+        
+        for article in article_elements[:5]:
             try:
                 title = article.select_one('h2').text.strip()
                 url = article.select_one('a')['href']
@@ -35,20 +40,26 @@ async def scrape_axios() -> List[Dict]:
                         "source": "Axios"
                     })
             except Exception as e:
-                logger.error(f"Error parsing Axios article: {e}")
+                logger.error(f"Error parsing Axios article: {e}", exc_info=True)
                 
+        logger.info(f"Successfully scraped {len(articles)} Axios articles")
         return articles
     except Exception as e:
-        logger.error(f"Error scraping Axios: {e}")
+        logger.error(f"Error scraping Axios: {e}", exc_info=True)
         return []
 
 async def scrape_arxiv() -> List[Dict]:
     try:
+        logger.info("Starting arXiv scrape")
         response = requests.get("https://arxiv.org/list/cs.AI/recent", headers=HEADERS)
+        response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         articles = []
         
-        for article in soup.select('.meta')[:5]:
+        article_elements = soup.select('.meta')
+        logger.info(f"Found {len(article_elements)} arXiv articles")
+        
+        for article in article_elements[:5]:
             try:
                 title = article.select_one('.title').text.replace("Title:", "").strip()
                 url = article.select_one('.list-identifier a')['href']
@@ -62,11 +73,12 @@ async def scrape_arxiv() -> List[Dict]:
                         "source": "arXiv"
                     })
             except Exception as e:
-                logger.error(f"Error parsing arXiv article: {e}")
+                logger.error(f"Error parsing arXiv article: {e}", exc_info=True)
                 
+        logger.info(f"Successfully scraped {len(articles)} arXiv articles")
         return articles
     except Exception as e:
-        logger.error(f"Error scraping arXiv: {e}")
+        logger.error(f"Error scraping arXiv: {e}", exc_info=True)
         return []
 
 async def scrape_all_sites() -> List[Dict]:
