@@ -76,33 +76,41 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
             articles = []
             for entry in feed.entries[:20]:  # Check last 20 entries
                 try:
-                    # Extract image URL from media content or enclosures
+                    # Extract and clean summary
+                    summary = entry.get('summary', '')
+                    if not summary and 'description' in entry:
+                        summary = entry['description']
+                    
+                    # Clean the summary
+                    summary = summary.replace('<p>', '').replace('</p>', '\n').strip()
+                    
+                    # Extract image URL
                     image_url = None
                     if 'media_content' in entry:
                         media_urls = [m['url'] for m in entry.media_content if 'url' in m]
                         if media_urls:
                             image_url = media_urls[0]
                     elif 'enclosures' in entry:
-                        image_urls = [e['href'] for e in entry.enclosures if 'href' in e and e.get('type', '').startswith('image/')]
+                        image_urls = [e['href'] for e in entry.enclosures 
+                                    if 'href' in e and e.get('type', '').startswith('image/')]
                         if image_urls:
                             image_url = image_urls[0]
 
-                    # Extract and clean summary
-                    summary = entry.get('summary', '')
-                    if not summary and 'description' in entry:
-                        summary = entry['description']
-                        
-                    # Clean the summary
-                    summary = summary.replace('<p>', '').replace('</p>', '\n').strip()
-
                     # Check if article is AI-related
-                    if any(keyword in entry.title.lower() or keyword in summary.lower() for keyword in AI_KEYWORDS):
+                    if any(keyword in entry.title.lower() or keyword in summary.lower() 
+                          for keyword in AI_KEYWORDS):
+                        # Parse date with correct format type
+                        date = parse_date(
+                            entry.get('published', entry.get('updated', '')),
+                            feed_info["date_format"]  # Pass the format type from feed_info
+                        )
+                        
                         articles.append({
                             "title": entry.title,
                             "url": entry.link,
                             "summary": summary,
                             "source": name,
-                            "published": parse_date(entry.get('published', entry.get('updated', ''))),
+                            "published": date.isoformat(),
                             "image_url": image_url
                         })
                         logger.info(f"Found AI-related article from {name}: {entry.title}")
