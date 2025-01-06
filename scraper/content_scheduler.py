@@ -3,13 +3,12 @@ import random
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-from .news_scraper import scrape_all_sites  # Add this import
-from pytube import Channel, YouTube
+from scraper.news_scraper import scrape_all_sites  # Changed from relative import
 import re
 import discord
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from ..config import config
+from config import config  # Changed from relative import
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
