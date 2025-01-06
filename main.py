@@ -63,7 +63,7 @@ class DiscordBot(commands.Bot):
         try:
             await self.tree.sync()
             logger.info("Command tree synced")
-            logger.info("Waiting for bot to be fully ready...")
+            # We'll initialize the scheduler in on_ready instead
         except Exception as e:
             logger.error(f"Error in setup_hook: {e}", exc_info=True)
 
@@ -71,34 +71,25 @@ class DiscordBot(commands.Bot):
         """Event handler for when the bot is ready and connected to Discord."""
         try:
             logger.info(f'Bot is ready. Logged in as {self.user.name}')
-            logger.info(f"Connected to {len(self.guilds)} guilds")
             
-            # Debug guild and channel info
-            for guild in self.guilds:
-                logger.info(f"Guild: {guild.name} (ID: {guild.id})")
-                logger.info("Available channels:")
-                for channel in guild.channels:
-                    if isinstance(channel, discord.TextChannel):
-                        logger.info(f"- #{channel.name}: {channel.id}")
-            
-            # Initialize scheduler after bot is fully ready
-            channel = self.get_channel(config.NEWS_CHANNEL_ID)
-            if not channel:
-                logger.error(f"Could not find news channel with ID {config.NEWS_CHANNEL_ID}")
-                logger.info("Please update NEWS_CHANNEL_ID in your environment variables with one of the above channel IDs")
-                return
-                
-            logger.info(f"Found news channel: #{channel.name}")
+            # Initialize scheduler if it hasn't been initialized yet
             if not self.scheduler:
-                self.scheduler = ArticleScheduler(self, config.NEWS_CHANNEL_ID)
-                await self.scheduler.start()
-                logger.info("ArticleScheduler started successfully")
-            
+                try:
+                    logger.info("Initializing scheduler...")
+                    self.scheduler = ArticleScheduler(self, config.NEWS_CHANNEL_ID)
+                    logger.info("Starting scheduler...")
+                    await self.scheduler.start()
+                    logger.info("Scheduler started successfully")
+                except Exception as e:
+                    logger.error(f"Failed to initialize scheduler: {e}", exc_info=True)
+                    return
+
+            # Only sync commands after scheduler is initialized
             try:
                 synced = await self.tree.sync()
                 logger.info(f"Synced {len(synced)} command(s)")
             except Exception as e:
-                logger.error(f"Error syncing commands: {e}")
+                logger.error(f"Error syncing commands: {e}", exc_info=True)
                 
         except Exception as e:
             logger.error(f"Error in on_ready: {e}", exc_info=True)

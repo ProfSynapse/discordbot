@@ -16,36 +16,34 @@ class ArticleScheduler:
         self.channel_id = channel_id
         self.articles_queue: List[Dict[str, Any]] = []
         self.running = False
+        self._schedule_task = None
+        self._drip_task = None
         
-        # Debug initialization
         logger.info(f"Initializing ArticleScheduler with channel ID: {channel_id}")
         self.channel = self.bot.get_channel(channel_id)
         if not self.channel:
             logger.error(f"Could not find channel {channel_id}")
-            logger.info("Available channels:")
-            for guild in self.bot.guilds:
-                logger.info(f"Guild: {guild.name}")
-                for channel in guild.channels:
-                    if isinstance(channel, discord.TextChannel):
-                        logger.info(f"- #{channel.name}: {channel.id}")
             raise ValueError(f"Channel {channel_id} not found")
-        
-        logger.info(f"Successfully initialized with channel: #{self.channel.name}")
+        logger.info(f"Found channel: #{self.channel.name}")
 
     async def start(self):
         """Start the scheduling loop"""
         try:
-            self.running = True
             logger.info("Starting ArticleScheduler")
+            self.running = True
             
             # Immediate first scrape
-            logger.info("Performing initial scrape")
+            logger.info("Performing initial scrape...")
             await self._perform_scrape()
+            logger.info("Initial scrape completed")
             
             # Start background tasks
             logger.info("Starting scheduler tasks")
-            self._schedule_task = asyncio.create_task(self._schedule_scrapes())
-            self._drip_task = asyncio.create_task(self._drip_articles())
+            self._schedule_task = asyncio.create_task(self._schedule_scrapes(), name="schedule_scrapes")
+            self._drip_task = asyncio.create_task(self._drip_articles(), name="drip_articles")
+            
+            # Monitor tasks for errors
+            asyncio.create_task(self._monitor_tasks())
             logger.info("Scheduler tasks started")
             
         except Exception as e:
@@ -55,7 +53,31 @@ class ArticleScheduler:
 
     async def stop(self):
         """Stop the scheduling loop"""
+        logger.info("Stopping scheduler...")
         self.running = False
+        if self._schedule_task:
+            self._schedule_task.cancel()
+        if self._drip_task:
+            self._drip_task.cancel()
+
+    async def _monitor_tasks(self):
+        """Monitor background tasks for errors"""
+        while self.running:
+            try:
+                if self._schedule_task and self._schedule_task.done():
+                    if self._schedule_task.exception():
+                        logger.error(f"Schedule task failed: {self._schedule_task.exception()}")
+                        self._schedule_task = asyncio.create_task(self._schedule_scrapes())
+                
+                if self._drip_task and self._drip_task.done():
+                    if self._drip_task.exception():
+                        logger.error(f"Drip task failed: {self._drip_task.exception()}")
+                        self._drip_task = asyncio.create_task(self._drip_articles())
+                
+                await asyncio.sleep(60)  # Check every minute
+            except Exception as e:
+                logger.error(f"Error in task monitor: {e}")
+                await asyncio.sleep(60)
 
     async def _schedule_scrapes(self):
         """Run scrapes twice daily"""
