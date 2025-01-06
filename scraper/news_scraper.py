@@ -3,10 +3,11 @@ import asyncio
 from typing import List, Dict
 import aiohttp
 import feedparser
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from time import mktime
 from email.utils import parsedate_to_datetime
+import re
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -101,8 +102,24 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                     if not summary and 'description' in entry:
                         summary = entry['description']
                     
-                    # Clean the summary
-                    summary = summary.replace('<p>', '').replace('</p>', '\n').strip()
+                    # More thorough HTML cleaning
+                    summary = (summary.replace('<p>', '')
+                                     .replace('</p>', '\n')
+                                     .replace('<figure>', '')
+                                     .replace('</figure>', '')
+                                     .replace('<figcaption>', '_')
+                                     .replace('</figcaption>', '_\n')
+                                     .replace('<img', '[Image')
+                                     .replace('/>', ']')
+                                     .replace('alt="', 'description: "'))
+                    
+                    # Remove HTML IDs
+                    summary = re.sub(r'id="[^"]*"', '', summary)
+                    # Remove any remaining HTML tags
+                    summary = re.sub(r'<[^>]+>', '', summary)
+                    # Fix multiple newlines
+                    summary = re.sub(r'\n\s*\n', '\n\n', summary)
+                    summary = summary.strip()
                     
                     # Extract image URL
                     image_url = None
@@ -150,7 +167,14 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
         return []
 
 def filter_new_articles(articles: List[Dict]) -> List[Dict]:
-    return [a for a in articles if a["url"] not in SCRAPED_URLS and not SCRAPED_URLS.add(a["url"])]
+    """Filter articles for uniqueness and recency (last 24 hours)"""
+    now = datetime.now(pytz.UTC)
+    return [
+        a for a in articles 
+        if a["url"] not in SCRAPED_URLS 
+        and not SCRAPED_URLS.add(a["url"])
+        and (now - datetime.fromisoformat(a['published'])) <= timedelta(hours=24)
+    ]
 
 async def scrape_all_sites() -> List[Dict]:
     logger.info("Starting scrape_all_sites")

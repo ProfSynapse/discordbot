@@ -4,7 +4,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from .news_scraper import scrape_all_sites
-from pytube import Channel
+from pytube import Channel, YouTube
+import re
 import discord
 
 logging.basicConfig(level=logging.INFO)
@@ -21,12 +22,12 @@ class ContentScheduler:
         self._drip_task = None
         self.seen_videos = set()
         
-        # YouTube channels to monitor
+        # YouTube channels to monitor (handle format will be extracted from URL)
         self.youtube_channels = [
-            "https://www.youtube.com/@synapticlabs",
-            "https://www.youtube.com/@aiexplained-official",
-            "https://www.youtube.com/@OpenAI",
-            "https://www.youtube.com/@Google_DeepMind",
+            "synapticlabs",
+            "aiexplained-official",
+            "OpenAI",
+            "Google_DeepMind",
             # Add more as needed
         ]
         
@@ -118,47 +119,78 @@ class ContentScheduler:
             # Fetch news articles
             logger.info("Fetching news articles...")
             new_articles = await scrape_all_sites()
-            if new_articles:
-                random.shuffle(new_articles)
-                self.articles_queue.extend(new_articles)
-                logger.info(f"Added {len(new_articles)} news articles to queue")
+            
+            # Filter for recent articles
+            recent_articles = [
+                article for article in new_articles
+                if self._is_recent(datetime.fromisoformat(article['published']))
+            ]
+            
+            if recent_articles:
+                random.shuffle(recent_articles)
+                self.articles_queue.extend(recent_articles)
+                logger.info(f"Added {len(recent_articles)} recent news articles to queue")
             else:
-                logger.warning("No news articles found")
+                logger.warning("No recent news articles found")
             
             # Fetch YouTube videos
             logger.info("Fetching YouTube videos...")
             youtube_count = 0
-            for channel_url in self.youtube_channels:
+            
+            for channel_name in self.youtube_channels:
                 try:
-                    videos = await asyncio.to_thread(self._fetch_channel_videos, channel_url)
-                    for video in videos[:5]:  # Check last 5 videos
+                    # Construct channel URL
+                    channel_url = f"https://www.youtube.com/@{channel_name}"
+                    logger.info(f"Fetching from channel: {channel_url}")
+                    
+                    channel = Channel(channel_url)
+                    videos = []
+                    
+                    # Get recent videos
+                    for video in channel.videos:
+                        try:
+                            # Check if video is recent (last 24 hours)
+                            if self._is_recent(video.publish_date):
+                                videos.append(video)
+                                if len(videos) >= 5:  # Limit to 5 recent videos per channel
+                                    break
+                        except Exception as e:
+                            logger.error(f"Error processing video {video.watch_url}: {e}")
+                            continue
+                    
+                    # Process found videos
+                    for video in videos:
                         if video.watch_url not in self.seen_videos:
-                            self.articles_queue.append({
-                                'type': 'youtube',
-                                'title': video.title,
-                                'url': video.watch_url,
-                                'author': video.author,
-                                'thumbnail_url': video.thumbnail_url,
-                                'published': datetime.now().isoformat()  # Add timestamp for sorting
-                            })
-                            self.seen_videos.add(video.watch_url)
-                            youtube_count += 1
+                            try:
+                                self.articles_queue.append({
+                                    'type': 'youtube',
+                                    'title': video.title,
+                                    'url': video.watch_url,
+                                    'author': channel_name,
+                                    'thumbnail_url': f"https://img.youtube.com/vi/{self._extract_video_id_from_url(video.watch_url)}/maxresdefault.jpg",
+                                    'published': video.publish_date.isoformat()
+                                })
+                                self.seen_videos.add(video.watch_url)
+                                youtube_count += 1
+                                logger.info(f"Added video: {video.title}")
+                            except Exception as e:
+                                logger.error(f"Error adding video to queue: {e}")
+                                continue
+                                
                 except Exception as e:
-                    logger.error(f"Error fetching from YouTube channel {channel_url}: {e}")
+                    logger.error(f"Error fetching from YouTube channel {channel_name}: {e}")
                     continue
             
-            logger.info(f"Added {youtube_count} YouTube videos to queue")
+            logger.info(f"Added {youtube_count} recent YouTube videos to queue")
             
             # Sort all content by date
-            try:
+            if self.articles_queue:
                 self.articles_queue.sort(
                     key=lambda x: datetime.fromisoformat(x.get('published', datetime.now().isoformat())),
                     reverse=True
                 )
-                logger.info(f"Total items in queue after fetch: {len(self.articles_queue)}")
-            except Exception as e:
-                logger.error(f"Error sorting content queue: {e}")
-                
+                logger.info(f"Total recent items in queue after fetch: {len(self.articles_queue)}")
+            
         except Exception as e:
             logger.error(f"Error during content fetch: {e}", exc_info=True)
 
@@ -170,6 +202,21 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"Error fetching videos from {channel_url}: {e}")
             return []
+
+    def _extract_video_id_from_url(self, url: str) -> str:
+        """Extract video ID from various YouTube URL formats"""
+        patterns = [
+            r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
+            r'youtu.be\/([0-9A-Za-z_-]{11})',
+        ]
+        for pattern in patterns:
+            if match := re.search(pattern, url):
+                return match.group(1)
+        return None
+
+    def _is_recent(self, date: datetime) -> bool:
+        """Check if date is within last 24 hours"""
+        return datetime.now(date.tzinfo) - date <= timedelta(hours=24)
 
     async def _drip_content(self):
         """Release content from queue throughout the day"""
@@ -218,14 +265,28 @@ class ContentScheduler:
         )
         
         if 'summary' in article:
-            summary = article['summary'][:1000] + "..." if len(article['summary']) > 1000 else article['summary']
-            embed.description = summary
+            # Clean up and format summary
+            summary = article['summary']
+            
+            # Truncate if too long, keeping complete sentences
+            if len(summary) > 1000:
+                # Find the last period within the first 1000 characters
+                last_period = summary[:1000].rfind('.')
+                if last_period > 0:
+                    summary = summary[:last_period + 1] + "..."
+                else:
+                    summary = summary[:997] + "..."
+            
+            embed.description = summary.strip()
         
         if 'image_url' in article and article['image_url']:
             embed.set_image(url=article['image_url'])
             
         source = article.get('source', 'Unknown source')
         date_str = article.get('published', 'Unknown date')
+        if isinstance(date_str, str) and date_str.endswith('+00:00'):
+            date_str = date_str[:-6]  # Remove timezone for cleaner display
+            
         embed.set_footer(text=f"Published {date_str} • {source}")
         
         return embed
