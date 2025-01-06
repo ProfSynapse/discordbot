@@ -8,11 +8,12 @@ import pytz
 from time import mktime
 from email.utils import parsedate_to_datetime
 import re
+from markdownify import markdownify as md
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-SCRAPED_URLS = set()
+# Removed SCRAPED_URLS = set()
 
 # Update RSS_FEEDS with format info
 RSS_FEEDS = {
@@ -102,6 +103,18 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                     if not summary and 'description' in entry:
                         summary = entry['description']
                     
+                    # Convert HTML to Discord-friendly markdown
+                    summary = md(summary, 
+                               heading_style="atx",  # Use # style headers
+                               strip=['script', 'style'],  # Remove these tags entirely
+                               convert=['b', 'i', 'em', 'strong', 'a'],  # Convert these tags to markdown
+                               escape_asterisks=True,
+                               escape_underscores=True)
+                    
+                    # Clean up any extra whitespace
+                    summary = re.sub(r'\n\s*\n\s*\n', '\n\n', summary)
+                    summary = summary.strip()
+                    
                     # Extract image URL from HTML content
                     image_url = None
                     if '[Image' in summary:
@@ -174,15 +187,7 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
         logger.error(f"Error fetching {name} feed: {e}", exc_info=True)
         return []
 
-def filter_new_articles(articles: List[Dict]) -> List[Dict]:
-    """Filter articles for uniqueness and recency (last 24 hours)"""
-    now = datetime.now(pytz.UTC)
-    return [
-        a for a in articles 
-        if a["url"] not in SCRAPED_URLS 
-        and not SCRAPED_URLS.add(a["url"])
-        and (now - datetime.fromisoformat(a['published'])) <= timedelta(hours=24)
-    ]
+# Removed filter_new_articles function
 
 async def scrape_all_sites() -> List[Dict]:
     logger.info("Starting scrape_all_sites")
@@ -216,9 +221,8 @@ async def scrape_all_sites() -> List[Dict]:
         except Exception as e:
             logger.error(f"Error sorting articles: {e}")
         
-        filtered_articles = filter_new_articles(all_articles)
-        logger.info(f"Total articles: {len(all_articles)}, After filtering: {len(filtered_articles)}")
-        return filtered_articles
+        # Return all_articles directly now:
+        return all_articles
         
     except Exception as e:
         logger.error(f"Error in scrape_all_sites: {e}", exc_info=True)

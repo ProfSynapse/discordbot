@@ -30,6 +30,7 @@ class ContentScheduler:
         self.seen_videos = set()
         self.news_channel = None
         self.youtube_channel = None
+        self.scraped_urls = set()  # Moved here from news_scraper.py
 
     async def start(self) -> None:
         try:
@@ -143,6 +144,18 @@ class ContentScheduler:
     def _is_recent(self, date: datetime) -> bool:
         return datetime.now(date.tzinfo) - date <= timedelta(hours=24)
 
+    def _is_new_and_recent(self, article: Dict[str, Any], hours: int = 24) -> bool:
+        try:
+            published = datetime.fromisoformat(article['published'])
+            recent_enough = (datetime.now(published.tzinfo) - published) <= timedelta(hours=hours)
+            not_seen = article['url'] not in self.scraped_urls
+            if recent_enough and not_seen:
+                self.scraped_urls.add(article['url'])
+                return True
+        except:
+            pass
+        return False
+
     def _create_news_embed(self, article: Dict[str, Any]) -> discord.Embed:
         embed = discord.Embed(
             title=article['title'],
@@ -199,19 +212,12 @@ class ContentScheduler:
             # Fetch news articles
             logger.info("Fetching news articles...")
             new_articles = await scrape_all_sites()
-            
-            # Filter for recent articles
-            recent_articles = [
-                article for article in new_articles
-                if self._is_recent(datetime.fromisoformat(article['published']))
-            ]
-            
-            if recent_articles:
-                random.shuffle(recent_articles)
-                self.articles_queue.extend(recent_articles)
-                logger.info(f"Added {len(recent_articles)} recent news articles to queue")
-            else:
-                logger.warning("No recent news articles found")
+            # Use unified filter:
+            filtered_articles = [a for a in new_articles if self._is_new_and_recent(a)]
+            if filtered_articles:
+                random.shuffle(filtered_articles)
+                self.articles_queue.extend(filtered_articles)
+                logger.info(f"Added {len(filtered_articles)} filtered articles to queue")
             
             # Fetch YouTube videos
             youtube_count = await self._fetch_youtube_videos()
@@ -243,3 +249,21 @@ class ContentScheduler:
             except Exception as e:
                 logger.error(f"Error in _drip_content: {e}", exc_info=True)
                 await asyncio.sleep(300)
+
+    async def _monitor_tasks(self):
+        """Monitor background tasks for errors and restart if needed."""
+        while self.running:
+            try:
+                for task in [self._schedule_task, self._drip_task]:
+                    if task and task.done() and not task.cancelled():
+                        if task.exception():
+                            logger.error(f"Task failed: {task.exception()}")
+                            # Restart failed task
+                            if task == self._schedule_task:
+                                self._schedule_task = asyncio.create_task(self._schedule_content())
+                            elif task == self._drip_task:
+                                self._drip_task = asyncio.create_task(self._drip_content())
+                await asyncio.sleep(60)  # Check every minute
+            except Exception as e:
+                logger.error(f"Error in task monitor: {e}")
+                await asyncio.sleep(60)  # Wait a minute before trying again
