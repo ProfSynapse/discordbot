@@ -7,18 +7,23 @@ from .news_scraper import scrape_all_sites  # Add this import
 from pytube import Channel, YouTube
 import re
 import discord
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from ..config import config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class ContentScheduler:
-    YOUTUBE_CHANNELS = [
-        "https://www.youtube.com/@AIExplained",
-        "https://www.youtube.com/@OpenAI",
-        "https://www.youtube.com/@GoogleDeepMind",
-        "https://www.youtube.com/@SynapticLabs",
-        "https://www.youtube.com/@godago",
-    ]
+    YOUTUBE_CHANNELS = {
+        "AIExplained": "UCNJ1Ymd5yFuUPtn21xtRbbw", 
+        "OpenAI": "UCXZCJLdBC09xxGZ6gcdrc6A",
+        "GoogleDeepMind": "UCP7jMXSY2xbc3KCAE0MHQ-A",
+        "SynapticLabs": "UCpQ8UQIEQ47AyLx__M-NTig",
+        "GodaGo": "UCrWUuwQOvfBYi0JQzigbr_g",
+        "Anthropic": "UCrDwWp7EBBv4NwvScIpBDOA",
+        "WesRoth":"UCqcbQf6yw5KzRoDDcZ_wBSw"
+    }
     
     def __init__(self, bot, news_channel_id: int, youtube_channel_id: int):
         self.bot = bot
@@ -32,6 +37,7 @@ class ContentScheduler:
         self.news_channel = None
         self.youtube_channel = None
         self.scraped_urls = set()  # Moved here from news_scraper.py
+        self.youtube = build('youtube', 'v3', developerKey=config.YOUTUBE_API_KEY)
 
     async def start(self) -> None:
         try:
@@ -63,61 +69,61 @@ class ContentScheduler:
                 task.cancel()
 
     async def _fetch_youtube_videos(self) -> int:
-        """Fetch recent YouTube videos from configured channels."""
+        """Fetch recent YouTube videos using YouTube Data API."""
         youtube_count = 0
         
         try:
-            for channel_url in self.YOUTUBE_CHANNELS:
+            for channel_name, channel_id in self.YOUTUBE_CHANNELS.items():
                 try:
-                    logger.info(f"Fetching from YouTube channel: {channel_url}")
-                    # Create Channel object
-                    try:
-                        channel = Channel(channel_url)
-                        channel_name = channel.channel_name
-                        logger.info(f"Connected to channel: {channel_name}")
-                        
-                        # Get recent videos
-                        for video in channel.videos:
-                            try:
-                                # Check if we've seen enough videos from this channel
-                                if youtube_count >= 5:
-                                    break
-                                    
-                                # Check if video is already seen
-                                if video.watch_url in self.seen_videos:
-                                    continue
-                                
-                                # Check if video is recent (within 24 hours)
-                                if not self._is_recent(video.publish_date):
-                                    continue
-                                
-                                # Add video to queue
-                                video_id = self._extract_video_id_from_url(video.watch_url)
-                                if not video_id:
-                                    continue
-                                
-                                self.articles_queue.append({
-                                    'type': 'youtube',
-                                    'title': video.title,
-                                    'url': video.watch_url,
-                                    'author': channel_name,
-                                    'thumbnail_url': f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg",
-                                    'published': video.publish_date.isoformat()
-                                })
-                                self.seen_videos.add(video.watch_url)
-                                youtube_count += 1
-                                logger.info(f"Added video: {video.title}")
-                                
-                            except Exception as e:
-                                logger.error(f"Error processing video: {str(e)}")
+                    # Get channel's recent uploads
+                    response = await asyncio.to_thread(
+                        self.youtube.search().list,
+                        part="snippet",
+                        channelId=channel_id,
+                        order="date",
+                        maxResults=5,
+                        type="video"
+                    ).execute()
+                    
+                    for item in response.get('items', []):
+                        try:
+                            video_id = item['id']['videoId']
+                            video_url = f"https://www.youtube.com/watch?v={video_id}"
+                            
+                            # Skip if already seen
+                            if video_url in self.seen_videos:
                                 continue
-                                
-                    except Exception as e:
-                        logger.error(f"Error accessing channel {channel_url}: {str(e)}")
-                        continue
-                        
+                            
+                            # Get published time
+                            published = datetime.fromisoformat(
+                                item['snippet']['publishedAt'].replace('Z', '+00:00')
+                            )
+                            
+                            # Check if recent
+                            if not self._is_recent(published):
+                                continue
+                            
+                            self.articles_queue.append({
+                                'type': 'youtube',
+                                'title': item['snippet']['title'],
+                                'url': video_url,
+                                'author': channel_name,
+                                'thumbnail_url': item['snippet']['thumbnails']['high']['url'],
+                                'published': published.isoformat()
+                            })
+                            self.seen_videos.add(video_url)
+                            youtube_count += 1
+                            logger.info(f"Added video: {item['snippet']['title']}")
+                            
+                        except Exception as e:
+                            logger.error(f"Error processing video: {str(e)}")
+                            continue
+                            
+                except HttpError as e:
+                    logger.error(f"YouTube API error for channel {channel_name}: {str(e)}")
+                    continue
                 except Exception as e:
-                    logger.error(f"Error in channel loop for {channel_url}: {str(e)}")
+                    logger.error(f"Error fetching from channel {channel_name}: {str(e)}")
                     continue
                     
             logger.info(f"Successfully fetched {youtube_count} YouTube videos")

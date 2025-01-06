@@ -31,6 +31,7 @@ class BotConfig:
     NEWS_CHANNEL_ID: int  # Discord channel ID for news articles
     OPENAI_API_KEY: str  # OpenAI API key for DALL-E
     YOUTUBE_CHANNEL_ID: int  # Discord channel for YouTube updates
+    YOUTUBE_API_KEY: str  # YouTube API key
     
     # Optional parameters with defaults
     LOG_LEVEL: str = 'INFO'  # Logging level (INFO, DEBUG, etc.)
@@ -57,6 +58,7 @@ class BotConfig:
             NEWS_CHANNEL_ID=int(os.environ['NEWS_CHANNEL_ID']),
             OPENAI_API_KEY=os.environ['OPENAI_API_KEY'],
             YOUTUBE_CHANNEL_ID=int(os.environ['YOUTUBE_CHANNEL_ID']),
+            YOUTUBE_API_KEY=os.environ['YOUTUBE_API_KEY'],
             LOG_LEVEL=os.environ.get('LOG_LEVEL', 'INFO'),
             MAX_MESSAGE_LENGTH=int(os.environ.get('MAX_MESSAGE_LENGTH', '2000')),
             MAX_HISTORY_MESSAGES=int(os.environ.get('MAX_HISTORY_MESSAGES', '100')),
