@@ -15,9 +15,16 @@ import logging
 from api_client import api_client, APIResponseError
 from config import config
 from scraper.scheduler import ArticleScheduler
+from openai import OpenAI
+from enum import Enum
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+
+class ImageSize(Enum):
+    SQUARE = "1024x1024"
+    PORTRAIT = "1024x1792"
+    LANDSCAPE = "1792x1024"
 
 class DiscordBot(commands.Bot):
     """
@@ -29,6 +36,7 @@ class DiscordBot(commands.Bot):
         intents.message_content = True
         super().__init__(command_prefix='/', intents=intents)
         self.scheduler = None
+        self.openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
         
     async def setup_hook(self):
         """Initialize bot commands and scheduler on startup."""
@@ -106,6 +114,27 @@ class DiscordBot(commands.Bot):
                 "I'll try to fix this and be back shortly!"
             )
 
+    async def generate_image(self, interaction: discord.Interaction, prompt: str, size: ImageSize = ImageSize.SQUARE):
+        """Generate an image using DALL-E 3"""
+        await interaction.response.defer()
+        try:
+            response = self.openai_client.images.generate(
+                model="dall-e-3",
+                prompt=prompt,
+                size=size.value,
+                quality="standard",
+                n=1,
+            )
+            
+            image_url = response.data[0].url
+            await interaction.followup.send(f"**{interaction.user.display_name}'s image prompt:**\n{prompt}\n{image_url}")
+            
+        except Exception as e:
+            logging.error(f"Image generation error: {str(e)}")
+            await interaction.followup.send(
+                "Sorry, I couldn't generate that image. Please try again with a different prompt."
+            )
+
 # Create bot instance
 bot = DiscordBot()
 
@@ -114,6 +143,22 @@ bot = DiscordBot()
 @commands.cooldown(1, 60, commands.BucketType.user)
 async def prof_command(interaction: discord.Interaction, *, prompt: str):
     await bot.prof(interaction, prompt=prompt)
+
+@bot.tree.command(name="image", description="Generate an image using DALL-E")
+@commands.cooldown(1, 60, commands.BucketType.user)
+async def image_command(
+    interaction: discord.Interaction, 
+    prompt: str,
+    size: str = "square"
+):
+    """Generate an image using DALL-E 3"""
+    size_map = {
+        "square": ImageSize.SQUARE,
+        "portrait": ImageSize.PORTRAIT,
+        "landscape": ImageSize.LANDSCAPE
+    }
+    image_size = size_map.get(size.lower(), ImageSize.SQUARE)
+    await bot.generate_image(interaction, prompt, image_size)
 
 @bot.event
 async def on_ready():

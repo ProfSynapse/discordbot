@@ -29,6 +29,7 @@ class BotConfig:
     GPT_TRAINER_TOKEN: str  # GPT Trainer API authentication token
     CHATBOT_UUID: str  # Unique identifier for the chatbot instance
     NEWS_CHANNEL_ID: int  # Discord channel ID for news articles
+    OPENAI_API_KEY: str  # OpenAI API key for DALL-E
     
     # Optional parameters with defaults
     LOG_LEVEL: str = 'INFO'  # Logging level (INFO, DEBUG, etc.)
@@ -53,6 +54,7 @@ class BotConfig:
             GPT_TRAINER_TOKEN=os.environ['GPT_TRAINER_TOKEN'],
             CHATBOT_UUID=os.environ['CHATBOT_UUID'],
             NEWS_CHANNEL_ID=int(os.environ['NEWS_CHANNEL_ID']),
+            OPENAI_API_KEY=os.environ['OPENAI_API_KEY'],
             LOG_LEVEL=os.environ.get('LOG_LEVEL', 'INFO'),
             MAX_MESSAGE_LENGTH=int(os.environ.get('MAX_MESSAGE_LENGTH', '2000')),
             MAX_HISTORY_MESSAGES=int(os.environ.get('MAX_HISTORY_MESSAGES', '100')),
