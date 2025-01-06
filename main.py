@@ -126,7 +126,6 @@ class DiscordBot(commands.Bot):
 
     async def generate_image(self, interaction: discord.Interaction, prompt: str, size: ImageSize = ImageSize.SQUARE):
         """Generate an image using DALL-E 3"""
-        # Simple defer - we'll send the artistic message after
         await interaction.response.defer()
         
         # Send the "preparing" message
@@ -142,11 +141,11 @@ class DiscordBot(commands.Bot):
             )
             
             image_url = response.data[0].url
-            # More artistic response format
+            # More artistic response format with cleaner URL presentation
             await interaction.followup.send(
                 f"🎨 **A masterpiece commissioned by {interaction.user.display_name}:**\n" +
                 f"*{prompt}*\n\n" +
-                f"{image_url}"
+                f"[View Image]({image_url})"
             )
             
         except Exception as e:
