@@ -1,12 +1,9 @@
 """
 Main Discord bot module that handles all Discord-specific functionality.
-This bot integrates with GPT Trainer API to provide conversational AI capabilities
-and manages URL-based knowledge base updates.
+This bot integrates with GPT Trainer API to provide conversational AI capabilities.
 
 Features:
 - Chat with AI using /prof command
-- Process and summarize URLs using /sum command
-- Automatic URL detection and processing
 - Message chunking for large responses
 - Rate limiting and error handling
 """
@@ -19,9 +16,6 @@ from api_client import api_client
 import textwrap
 import logging
 from conversation_history import update_conversation_history, get_user_context
-import datetime
-from bs4 import BeautifulSoup
-import requests
 import asyncio
 from config import config
 from scraper.scheduler import ArticleScheduler
@@ -76,8 +70,6 @@ class DiscordBot(commands.Bot):
         else:
             await message.channel.send("No valid URL found in the message.")
 
-    @bot.tree.command(name="prof", description="Chat with Professor Synapse")
-    @commands.cooldown(1, 60, commands.BucketType.user)  # Rate limit: 1 use per minute per user
     async def prof(self, interaction: discord.Interaction, *, prompt: str):
         await interaction.response.defer()
         try:
@@ -108,6 +100,12 @@ class DiscordBot(commands.Bot):
 
 # Create bot instance
 bot = DiscordBot()
+
+# Register the command after bot creation
+@bot.tree.command(name="prof", description="Chat with Professor Synapse")
+@commands.cooldown(1, 60, commands.BucketType.user)
+async def prof_command(interaction: discord.Interaction, *, prompt: str):
+    await bot.prof(interaction, prompt=prompt)
 
 @bot.event
 async def on_ready():
@@ -210,56 +208,6 @@ def extract_url(message_content):
         if word.startswith("http://") or word.startswith("https://"):
             return word
     return None
-
-def get_metadata(url):
-    try:
-        response = requests.get(url)
-        soup = BeautifulSoup(response.content, 'html.parser')
-
-        title = soup.find('title').text.strip() if soup.find('title') else ''
-        description = soup.find('meta', attrs={'name': 'description'})['content'].strip() if soup.find('meta', attrs={'name': 'description'}) else ''
-
-        return title, description
-    except Exception as e:
-        logging.exception(f"Error occurred while retrieving metadata for URL '{url}': {str(e)}")
-        return '', ''
-
-@bot.tree.command(name="sum", description="Summarize links from the previous week")
-async def sum(interaction: discord.Interaction):
-    await interaction.response.defer()
-
-    try:
-        one_week_ago = datetime.datetime.utcnow() - datetime.timedelta(weeks=1)
-        links = []
-
-        for channel in interaction.guild.text_channels:
-            async for message in channel.history(limit=None, after=one_week_ago):
-                if message.author != bot.user and any(url in message.content for url in ["http://", "https://"]):
-                    links.append(message.content)
-
-        if links:
-            link_metadata = []
-            for link in links:
-                title, description = get_metadata(link)
-                link_metadata.append(f"Link: {link}\nTitle: {title}\nDescription: {description}")
-
-            link_metadata_str = "\n\n".join(link_metadata)
-
-            session_uuid = create_chat_session()
-            prompt = f"Provide the links and a one-sentence description for each of the following links based on their title and description:\n\n{link_metadata_str}"
-            bot_response = gpt_response(session_uuid, prompt)
-
-            summary_message = "**Link Summaries (Previous Week):**\n" + bot_response
-            message_chunks = chunk_message_by_paragraphs(summary_message)
-
-            for chunk in message_chunks:
-                await interaction.followup.send(chunk)
-        else:
-            await interaction.followup.send("No links found in the channels for the previous week.")
-
-    except Exception as e:
-        logging.exception(f"Error occurred in /sum command: {str(e)}")
-        await interaction.followup.send("An error occurred while processing the /sum command. Please check the bot logs for more information.")
 
 if __name__ == "__main__":
     bot.run(config.DISCORD_TOKEN)
