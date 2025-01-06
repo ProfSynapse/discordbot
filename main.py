@@ -80,23 +80,28 @@ class DiscordBot(commands.Bot):
                 session_uuid = await client.create_chat_session()
                 bot_response = await client.get_response(session_uuid, prompt, user_context)
 
-            # Update the conversation history with the user's prompt
-            update_conversation_history(user_id, f"User: {prompt}")
+            # Ensure we got a valid response
+            if not bot_response or bot_response.isspace():
+                raise APIResponseError("Empty response received from API")
 
-            # Update the conversation history with the bot's response
+            # Update conversation history
+            update_conversation_history(user_id, f"User: {prompt}")
             update_conversation_history(user_id, f"Assistant: {bot_response}")
 
-            # Combine the query and the response
+            # Send response in chunks
             full_message = f"**Query:**\n{prompt}\n\n{bot_response}"
             message_chunks = chunk_message_by_paragraphs(full_message)
 
-            # Send each chunk as a separate message
             for chunk in message_chunks:
                 await interaction.followup.send(chunk)
 
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
-            await interaction.followup.send("An error occurred while processing your request. Please try again later.")
+            error_message = (
+                "An error occurred while processing your request. "
+                "I'll try to fix this and be back shortly!"
+            )
+            await interaction.followup.send(error_message)
 
 # Create bot instance
 bot = DiscordBot()

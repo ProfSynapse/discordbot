@@ -4,7 +4,7 @@ Provides an async context manager interface for efficient connection management
 and implements rate limiting and error handling.
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, AsyncGenerator
 import aiohttp
 import asyncio
 import logging
@@ -44,6 +44,7 @@ class GPTTrainerAPI:
         }
         self._session: Optional[aiohttp.ClientSession] = None
         self._lock = asyncio.Lock()
+        self.timeout = aiohttp.ClientTimeout(total=30, connect=10)  # Increased timeouts
 
     async def __aenter__(self):
         if not self._session:
@@ -95,6 +96,34 @@ class GPTTrainerAPI:
 
         raise last_error or APIResponseError("Maximum retries exceeded")
 
+    async def _make_streaming_request(self, endpoint: str, data: Dict[str, Any]) -> AsyncGenerator[str, None]:
+        """Make a streaming API request."""
+        if not self._session:
+            self._session = aiohttp.ClientSession(timeout=self.timeout)
+
+        url = f'{self.base_url}/{endpoint}'
+        try:
+            async with self._lock:
+                async with self._session.post(url, headers=self.headers, json=data) as response:
+                    if response.status >= 500:
+                        raise ServerError(f"Server error: {response.status}")
+                    
+                    response.raise_for_status()
+                    async for line in response.content.iter_any():
+                        if line:
+                            try:
+                                decoded = line.decode('utf-8').strip()
+                                if decoded.startswith('data: '):
+                                    decoded = decoded[6:]  # Remove 'data: ' prefix
+                                if decoded:
+                                    yield decoded
+                            except Exception as e:
+                                logging.error(f"Error decoding stream: {e}")
+                                continue
+        except Exception as e:
+            logging.error(f"Streaming request failed: {e}")
+            raise
+
     async def create_chat_session(self) -> str:
         """
         Create a new chat session with the GPT Trainer service.
@@ -110,30 +139,35 @@ class GPTTrainerAPI:
         return data['uuid']
 
     async def get_response(self, session_uuid: str, message: str, context: str = "") -> str:
-        """Get an AI response with improved error handling."""
+        """Get an AI response using streaming endpoint."""
         try:
-            endpoint = f'session/{session_uuid}/message'
-            data = await self._make_request(
-                'POST', 
+            endpoint = f'session/{session_uuid}/message/stream'  # Changed to streaming endpoint
+            full_response = []
+            
+            async for chunk in self._make_streaming_request(
                 endpoint,
-                retries=3,
-                json={'query': f"{context}\nUser: {message}"}
-            )
-            return data.get('response', "I apologize, but I couldn't generate a response at this time.")
+                {'query': f"{context}\nUser: {message}"}
+            ):
+                try:
+                    # Try to parse JSON response
+                    data = json.loads(chunk)
+                    if isinstance(data, dict) and 'text' in data:
+                        full_response.append(data['text'])
+                except json.JSONDecodeError:
+                    # If not JSON, append raw chunk
+                    full_response.append(chunk)
+                
+            return ''.join(full_response) if full_response else "I apologize, but I couldn't generate a response."
+                    
         except ServerError as e:
             logging.error(f"Server error in get_response: {e}")
             return "I'm experiencing technical difficulties with my server. Please try again in a few minutes."
-        except APIResponseError as e:
-            logging.error(f"API error in get_response: {e}")
+        except Exception as e:
+            logging.error(f"Error in get_response: {e}")
             try:
+                # Fallback to creating new session
                 new_session_uuid = await self.create_chat_session()
-                data = await self._make_request(
-                    'POST',
-                    f'session/{new_session_uuid}/message',
-                    retries=2,
-                    json={'query': f"{context}\nUser: {message}"}
-                )
-                return data.get('response', "I apologize, but I couldn't generate a response at this time.")
+                return await self.get_response(new_session_uuid, message, context)
             except Exception as retry_error:
                 logging.error(f"Retry failed: {retry_error}")
                 return "I'm having trouble processing your request. Please try again in a moment."
