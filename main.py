@@ -19,7 +19,6 @@ from api_client import api_client
 import textwrap
 import logging
 from conversation_history import update_conversation_history, get_user_context
-from data_source import upload_data_source
 import datetime
 from bs4 import BeautifulSoup
 import requests
@@ -71,9 +70,9 @@ class DiscordBot(commands.Bot):
         if url:
             async with api_client as client:
                 if await client.upload_data_source(url):
-                    await message.channel.send(f"Data source '{url}' has been added to the bot's knowledge base.")
+                    await message.channel.send(f"URL '{url}' has been processed.")
                 else:
-                    await message.channel.send("An error occurred while uploading the data source.")
+                    await message.channel.send("An error occurred while processing the URL.")
         else:
             await message.channel.send("No valid URL found in the message.")
 
