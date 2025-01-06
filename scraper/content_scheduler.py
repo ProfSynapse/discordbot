@@ -48,7 +48,13 @@ class ContentScheduler:
             
             self.running = True
             
+            # Perform initial content fetch
+            logger.info("Performing initial content fetch...")
+            await self._fetch_all_content()
+            logger.info(f"Initial fetch complete. Queue size: {len(self.articles_queue)}")
+            
             # Start content scheduling tasks
+            logger.info("Starting scheduler tasks...")
             self._schedule_task = asyncio.create_task(self._schedule_content())
             self._drip_task = asyncio.create_task(self._drip_content())
             
@@ -110,25 +116,48 @@ class ContentScheduler:
         """Fetch both news articles and YouTube videos"""
         try:
             # Fetch news articles
+            logger.info("Fetching news articles...")
             new_articles = await scrape_all_sites()
             if new_articles:
                 random.shuffle(new_articles)
                 self.articles_queue.extend(new_articles)
-                logger.info(f"Added {len(new_articles)} articles to queue")
+                logger.info(f"Added {len(new_articles)} news articles to queue")
+            else:
+                logger.warning("No news articles found")
             
             # Fetch YouTube videos
+            logger.info("Fetching YouTube videos...")
+            youtube_count = 0
             for channel_url in self.youtube_channels:
-                videos = await asyncio.to_thread(self._fetch_channel_videos, channel_url)
-                for video in videos[:5]:  # Check last 5 videos
-                    if video.watch_url not in self.seen_videos:
-                        self.articles_queue.append({
-                            'type': 'youtube',
-                            'title': video.title,
-                            'url': video.watch_url,
-                            'author': video.author,
-                            'thumbnail_url': video.thumbnail_url
-                        })
-                        self.seen_videos.add(video.watch_url)
+                try:
+                    videos = await asyncio.to_thread(self._fetch_channel_videos, channel_url)
+                    for video in videos[:5]:  # Check last 5 videos
+                        if video.watch_url not in self.seen_videos:
+                            self.articles_queue.append({
+                                'type': 'youtube',
+                                'title': video.title,
+                                'url': video.watch_url,
+                                'author': video.author,
+                                'thumbnail_url': video.thumbnail_url,
+                                'published': datetime.now().isoformat()  # Add timestamp for sorting
+                            })
+                            self.seen_videos.add(video.watch_url)
+                            youtube_count += 1
+                except Exception as e:
+                    logger.error(f"Error fetching from YouTube channel {channel_url}: {e}")
+                    continue
+            
+            logger.info(f"Added {youtube_count} YouTube videos to queue")
+            
+            # Sort all content by date
+            try:
+                self.articles_queue.sort(
+                    key=lambda x: datetime.fromisoformat(x.get('published', datetime.now().isoformat())),
+                    reverse=True
+                )
+                logger.info(f"Total items in queue after fetch: {len(self.articles_queue)}")
+            except Exception as e:
+                logger.error(f"Error sorting content queue: {e}")
                 
         except Exception as e:
             logger.error(f"Error during content fetch: {e}", exc_info=True)
@@ -148,6 +177,7 @@ class ContentScheduler:
             try:
                 if self.articles_queue:
                     content = self.articles_queue.pop(0)
+                    logger.info(f"Posting content: {content.get('title', 'Unknown title')}")
                     
                     if content.get('type') == 'youtube':
                         # Post YouTube content
@@ -160,16 +190,20 @@ class ContentScheduler:
                         if content['thumbnail_url']:
                             embed.set_image(url=content['thumbnail_url'])
                         await self.youtube_channel.send(embed=embed)
+                        logger.info(f"Posted YouTube video: {content['title']}")
                     else:
                         # Post news article
                         embed = self._create_news_embed(content)
                         await self.news_channel.send(embed=embed)
+                        logger.info(f"Posted news article: {content['title']}")
                     
                     # Random delay between posts (30-90 minutes)
                     delay = random.randint(1800, 5400)
+                    logger.info(f"Waiting {delay} seconds before next post")
                     await asyncio.sleep(delay)
                 else:
-                    await asyncio.sleep(900)  # Wait 15 minutes if queue is empty
+                    logger.info("Content queue empty, waiting 15 minutes")
+                    await asyncio.sleep(900)
                     
             except Exception as e:
                 logger.error(f"Error in content drip: {e}")

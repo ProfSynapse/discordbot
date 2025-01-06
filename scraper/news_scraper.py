@@ -34,6 +34,26 @@ RSS_FEEDS = {
     "ArXiv AI": {
         "url": "http://export.arxiv.org/rss/cs.AI",
         "date_format": "arxiv"  # Special handling for arXiv
+    },
+    "Meditations on Alignment": {
+        "url": "https://professorsynapse.substack.com/",
+        "date_format": "rfc822"
+    },
+    "Gary Marcus": {
+        "url": "https://garymarcus.substack.com/feed",
+        "date_format": "rfc822"
+    },
+    "One Useful Thing": {
+        "url": "https://oneusefulthing.substack.com/feed",
+        "date_format": "rfc822"
+    },
+    "Prompthub": {
+        "url": "https://prompthub.substack.com/feed",
+        "date_format": "rfc822"
+    },
+        "Astral Codex": {
+        "url": "https://astralcodexten.substack.com/feed",
+        "date_format": "rfc822"
     }
 }
 
