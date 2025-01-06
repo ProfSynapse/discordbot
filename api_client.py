@@ -141,8 +141,9 @@ class GPTTrainerAPI:
     async def get_response(self, session_uuid: str, message: str, context: str = "") -> str:
         """Get an AI response using streaming endpoint."""
         try:
-            endpoint = f'session/{session_uuid}/message/stream'  # Changed to streaming endpoint
+            endpoint = f'session/{session_uuid}/message/stream'
             full_response = []
+            last_chunk_ended_with_space = False
             
             async for chunk in self._make_streaming_request(
                 endpoint,
@@ -152,12 +153,32 @@ class GPTTrainerAPI:
                     # Try to parse JSON response
                     data = json.loads(chunk)
                     if isinstance(data, dict) and 'text' in data:
-                        full_response.append(data['text'])
+                        text = data['text']
+                        
+                        # Debug logging
+                        logging.debug(f"Received chunk: '{text}' (len={len(text)})")
+                        
+                        # Add space between chunks if needed
+                        if full_response and not last_chunk_ended_with_space and not text.startswith(' '):
+                            full_response.append(' ')
+                        
+                        full_response.append(text)
+                        last_chunk_ended_with_space = text.endswith(' ')
                 except json.JSONDecodeError:
-                    # If not JSON, append raw chunk
-                    full_response.append(chunk)
-                
-            return ''.join(full_response) if full_response else "I apologize, but I couldn't generate a response."
+                    # If not JSON, clean and append raw chunk
+                    text = chunk.strip()
+                    if text:
+                        if full_response and not last_chunk_ended_with_space and not text.startswith(' '):
+                            full_response.append(' ')
+                        full_response.append(text)
+                        last_chunk_ended_with_space = text.endswith(' ')
+            
+            # Join and clean up the final response
+            final_response = ''.join(full_response).strip()
+            # Normalize multiple spaces
+            final_response = ' '.join(final_response.split())
+            
+            return final_response if final_response else "I apologize, but I couldn't generate a response."
                     
         except ServerError as e:
             logging.error(f"Server error in get_response: {e}")
