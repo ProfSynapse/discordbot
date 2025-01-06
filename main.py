@@ -63,7 +63,6 @@ class DiscordBot(commands.Bot):
         try:
             await self.tree.sync()
             logger.info("Command tree synced")
-            # We'll initialize the scheduler in on_ready instead
         except Exception as e:
             logger.error(f"Error in setup_hook: {e}", exc_info=True)
 
@@ -76,21 +75,19 @@ class DiscordBot(commands.Bot):
             if not self.scheduler:
                 try:
                     logger.info("Initializing scheduler...")
+                    channel = self.get_channel(config.NEWS_CHANNEL_ID)
+                    if not channel:
+                        logger.error(f"Could not find news channel with ID {config.NEWS_CHANNEL_ID}")
+                        return
+                    logger.info(f"Found news channel: #{channel.name}")
+                    
                     self.scheduler = ArticleScheduler(self, config.NEWS_CHANNEL_ID)
                     logger.info("Starting scheduler...")
                     await self.scheduler.start()
                     logger.info("Scheduler started successfully")
                 except Exception as e:
                     logger.error(f"Failed to initialize scheduler: {e}", exc_info=True)
-                    return
-
-            # Only sync commands after scheduler is initialized
-            try:
-                synced = await self.tree.sync()
-                logger.info(f"Synced {len(synced)} command(s)")
-            except Exception as e:
-                logger.error(f"Error syncing commands: {e}", exc_info=True)
-                
+            
         except Exception as e:
             logger.error(f"Error in on_ready: {e}", exc_info=True)
 
@@ -233,16 +230,6 @@ async def image_command(
             break
     
     await bot.generate_image(interaction, clean_prompt, image_size)
-
-@bot.event
-async def on_ready():
-    """Event handler for when the bot is ready and connected to Discord."""
-    logging.info(f'Bot is ready. Logged in as {bot.user.name}')
-    try:
-        synced = await bot.tree.sync()
-        logging.info(f"Synced {len(synced)} command(s)")
-    except Exception as e:
-        logging.error(f"Error syncing commands: {e}")
 
 def chunk_message_by_paragraphs(message, max_length=2000):
     """

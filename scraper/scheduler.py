@@ -20,16 +20,27 @@ class ArticleScheduler:
         self._drip_task = None
         
         logger.info(f"Initializing ArticleScheduler with channel ID: {channel_id}")
-        self.channel = self.bot.get_channel(channel_id)
-        if not self.channel:
-            logger.error(f"Could not find channel {channel_id}")
-            raise ValueError(f"Channel {channel_id} not found")
-        logger.info(f"Found channel: #{self.channel.name}")
+        # Move channel verification to start() method since bot might not be ready yet
+        self.channel = None
 
     async def start(self):
         """Start the scheduling loop"""
         try:
             logger.info("Starting ArticleScheduler")
+            
+            # Verify channel access first
+            self.channel = self.bot.get_channel(self.channel_id)
+            if not self.channel:
+                logger.error(f"Could not find channel {self.channel_id}")
+                raise ValueError(f"Channel {self.channel_id} not found")
+            
+            # Test channel permissions
+            try:
+                await self.channel.send("🤖 News feed initialized! I'll start sharing AI news articles shortly.")
+            except discord.Forbidden:
+                logger.error(f"Bot doesn't have permission to send messages to channel {self.channel_id}")
+                raise ValueError(f"Missing permissions for channel {self.channel_id}")
+            
             self.running = True
             
             # Immediate first scrape
@@ -44,7 +55,7 @@ class ArticleScheduler:
             
             # Monitor tasks for errors
             asyncio.create_task(self._monitor_tasks())
-            logger.info("Scheduler tasks started")
+            logger.info("Scheduler tasks started successfully")
             
         except Exception as e:
             logger.error(f"Error starting scheduler: {e}", exc_info=True)
