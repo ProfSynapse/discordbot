@@ -100,17 +100,22 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                     if any(keyword in entry.title.lower() or keyword in summary.lower() 
                           for keyword in AI_KEYWORDS):
                         # Parse date with correct format type
-                        date = parse_date(
-                            entry.get('published', entry.get('updated', '')),
-                            feed_info["date_format"]  # Pass the format type from feed_info
-                        )
+                        try:
+                            date = parse_date(
+                                entry.get('published', entry.get('updated', '')),
+                                feed_info["date_format"]
+                            )
+                            date_str = date.isoformat()
+                        except Exception as e:
+                            logger.error(f"Date parsing error: {e}")
+                            date_str = datetime.now(pytz.UTC).isoformat()
                         
                         articles.append({
                             "title": entry.title,
                             "url": entry.link,
                             "summary": summary,
                             "source": name,
-                            "published": date.isoformat(),
+                            "published": date_str,
                             "image_url": image_url
                         })
                         logger.info(f"Found AI-related article from {name}: {entry.title}")
@@ -118,7 +123,7 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                     logger.error(f"Error processing entry from {name}: {e}")
                     continue
             
-            return articles[5]  # Return up to 3 matching articles per source
+            return articles  # Return all matching articles
             
     except Exception as e:
         logger.error(f"Error fetching {name} feed: {e}", exc_info=True)
@@ -151,10 +156,13 @@ async def scrape_all_sites() -> List[Dict]:
                 all_articles.extend(result)
         
         # Sort by publication date
-        all_articles.sort(
-            key=lambda x: datetime.fromisoformat(x['published']),
-            reverse=True
-        )
+        try:
+            all_articles.sort(
+                key=lambda x: datetime.fromisoformat(x.get('published', datetime.now(pytz.UTC).isoformat())),
+                reverse=True
+            )
+        except Exception as e:
+            logger.error(f"Error sorting articles: {e}")
         
         filtered_articles = filter_new_articles(all_articles)
         logger.info(f"Total articles: {len(all_articles)}, After filtering: {len(filtered_articles)}")

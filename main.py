@@ -15,7 +15,7 @@ import textwrap
 import logging
 from api_client import api_client, APIResponseError
 from config import config
-from scraper.scheduler import ArticleScheduler
+from scraper.content_scheduler import ContentScheduler  # Updated import
 from openai import OpenAI
 from enum import Enum
 from scraper.content_scraper import scrape_article_content
@@ -71,20 +71,17 @@ class DiscordBot(commands.Bot):
         try:
             logger.info(f'Bot is ready. Logged in as {self.user.name}')
             
-            # Initialize scheduler if it hasn't been initialized yet
+            # Initialize unified content scheduler
             if not self.scheduler:
                 try:
-                    logger.info("Initializing scheduler...")
-                    channel = self.get_channel(config.NEWS_CHANNEL_ID)
-                    if not channel:
-                        logger.error(f"Could not find news channel with ID {config.NEWS_CHANNEL_ID}")
-                        return
-                    logger.info(f"Found news channel: #{channel.name}")
-                    
-                    self.scheduler = ArticleScheduler(self, config.NEWS_CHANNEL_ID)
-                    logger.info("Starting scheduler...")
+                    logger.info("Initializing content scheduler...")
+                    self.scheduler = ContentScheduler(
+                        self, 
+                        config.NEWS_CHANNEL_ID,
+                        config.YOUTUBE_CHANNEL_ID
+                    )
                     await self.scheduler.start()
-                    logger.info("Scheduler started successfully")
+                    logger.info("Content scheduler started successfully")
                 except Exception as e:
                     logger.error(f"Failed to initialize scheduler: {e}", exc_info=True)
             
