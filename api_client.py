@@ -142,12 +142,19 @@ class GPTTrainerAPI:
         """Get an AI response using streaming endpoint."""
         try:
             endpoint = f'session/{session_uuid}/message/stream'
+            query = message
+            if context:
+                # Add a newline after context if it exists
+                query = f"{context}\n\nUser: {message}"
+            else:
+                query = f"User: {message}"
+                
             full_response = []
             last_chunk_ended_with_space = False
             
             async for chunk in self._make_streaming_request(
                 endpoint,
-                {'query': f"{context}\nUser: {message}"}
+                {'query': query}
             ):
                 try:
                     # Try to parse JSON response

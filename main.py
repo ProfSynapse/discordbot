@@ -10,13 +10,9 @@ Features:
 
 import discord
 from discord.ext import commands
-from discord import app_commands
-import os
-from api_client import api_client
 import textwrap
 import logging
-from conversation_history import update_conversation_history, get_user_context
-import asyncio
+from api_client import api_client, APIResponseError
 from config import config
 from scraper.scheduler import ArticleScheduler
 
@@ -73,35 +69,39 @@ class DiscordBot(commands.Bot):
     async def prof(self, interaction: discord.Interaction, *, prompt: str):
         await interaction.response.defer()
         try:
-            user_id = str(interaction.user.id)
-            user_context = get_user_context(user_id)
+            # Get last 10 messages from the channel
+            channel = interaction.channel
+            messages = [msg async for msg in channel.history(limit=10)]
+            messages.reverse()  # Put in chronological order
+            
+            # Format message history
+            context = "<recent_channel_conversation>\n"
+            for msg in messages:
+                author_name = msg.author.display_name
+                # Skip bot commands and empty messages
+                if not msg.content.startswith('/') and msg.content.strip():
+                    context += f"{author_name}: {msg.content}\n"
+            context += "</recent_channel_conversation>"
             
             async with api_client as client:
                 session_uuid = await client.create_chat_session()
-                bot_response = await client.get_response(session_uuid, prompt, user_context)
+                bot_response = await client.get_response(session_uuid, prompt, context)
 
-            # Ensure we got a valid response
             if not bot_response or bot_response.isspace():
                 raise APIResponseError("Empty response received from API")
 
-            # Update conversation history
-            update_conversation_history(user_id, f"User: {prompt}")
-            update_conversation_history(user_id, f"Assistant: {bot_response}")
-
-            # Send response in chunks
-            full_message = f"**Query:**\n{prompt}\n\n{bot_response}"
-            message_chunks = chunk_message_by_paragraphs(full_message)
+            # Send response in chunks without including the query
+            message_chunks = chunk_message_by_paragraphs(bot_response)
 
             for chunk in message_chunks:
                 await interaction.followup.send(chunk)
 
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
-            error_message = (
+            await interaction.followup.send(
                 "An error occurred while processing your request. "
                 "I'll try to fix this and be back shortly!"
             )
-            await interaction.followup.send(error_message)
 
 # Create bot instance
 bot = DiscordBot()
@@ -154,17 +154,10 @@ def chunk_message_by_paragraphs(message, max_length=2000):
     if current_chunk:
         chunks.append(current_chunk)
 
-    chunked_messages = []
-    for i, chunk in enumerate(chunks, 1):
-        chunk_prefix = f"Part {i}/{len(chunks)}:\n"
-        if len(chunk) + len(chunk_prefix) > max_length:
-            first_line_len = max_length - len(chunk_prefix)
-            chunked_messages.append(chunk_prefix + chunk[:first_line_len])
-            chunked_messages.extend(textwrap.wrap(chunk[first_line_len:], max_length))
-        else:
-            chunked_messages.append(chunk_prefix + chunk)
-
-    return chunked_messages
+    # Only add part numbers if there are multiple chunks
+    if len(chunks) > 1:
+        return [f"Part {i}/{len(chunks)}:\n{chunk}" for i, chunk in enumerate(chunks, 1)]
+    return chunks
 
 @bot.event
 async def on_message(message):
@@ -172,7 +165,7 @@ async def on_message(message):
         return
 
     if any(url in message.content for url in ["http://", "https://"]):
-        await message.add_reaction("📚")  # Add a book emoji to messages containing a URL
+        await message.add_reaction("📚")
 
     await bot.process_commands(message)
 
