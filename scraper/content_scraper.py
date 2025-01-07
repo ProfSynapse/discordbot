@@ -2,6 +2,7 @@ import logging
 from typing import Optional
 import re
 from pyppeteer import launch
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -12,22 +13,44 @@ async def scrape_article_content(url: str) -> Optional[str]:
     """
     browser = None
     try:
+        # Add Chrome executable path and more launch options
+        chrome_args = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu',
+            '--window-size=1920x1080',
+            '--disable-software-rasterizer',
+            '--disable-extensions',
+            '--single-process',  # Important for Docker
+            '--no-zygote',       # Important for Docker
+            '--disable-setuid-sandbox'
+        ]
+
+        # Launch with more specific options
         browser = await launch(
             headless=True,
-            args=[
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--disable-gpu',
-                '--window-size=1920x1080',
-            ]
+            args=chrome_args,
+            executablePath='/usr/bin/google-chrome',  # Specify Chrome path
+            handleSIGINT=False,
+            handleSIGTERM=False,
+            handleSIGHUP=False,
+            env={'DISPLAY': ':99'},  # Set display for Docker
+            dumpio=True  # Log browser console output
         )
+
+        # Set up a new page with longer timeout
         page = await browser.newPage()
+        await page.setDefaultNavigationTimeout(60000)  # 60 second timeout
         
-        # Set timeout to 30 seconds
-        await page.setDefaultNavigationTimeout(30000)
-        
+        # Additional error handlers
+        page.on('error', lambda err: logger.error(f'Page error: {err}'))
+        page.on('pageerror', lambda err: logger.error(f'Page error: {err}'))
+
+        # Set user agent to avoid detection
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36')
+
         # Navigate to the page
         await page.goto(url)
         
@@ -75,12 +98,12 @@ async def scrape_article_content(url: str) -> Optional[str]:
         return None
         
     except Exception as e:
-        logger.error(f"Error scraping article content: {e}")
+        logger.error(f"Error scraping article content: {str(e)}", exc_info=True)
         return None
         
     finally:
         if browser:
             try:
                 await browser.close()
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Error closing browser: {str(e)}")

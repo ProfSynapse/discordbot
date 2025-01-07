@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Install Chrome dependencies
+# Install Chrome dependencies and Xvfb
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -23,13 +23,20 @@ RUN apt-get update && apt-get install -y \
     libxrandr2 \
     xdg-utils \
     libxshmfence1 \
+    xvfb \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Chrome
 RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-    && dpkg -i google-chrome-stable_current_amd64.deb || apt-get -f install -y \
-    && rm google-chrome-stable_current_amd64.deb
+    && apt-get update \
+    && apt-get install -y ./google-chrome-stable_current_amd64.deb \
+    && rm google-chrome-stable_current_amd64.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create a wrapper script to launch Xvfb and the bot
+RUN echo '#!/bin/bash\nXvfb :99 -screen 0 1024x768x16 &\nexport DISPLAY=:99\npython main.py' > /app/start.sh \
+    && chmod +x /app/start.sh
 
 # Set working directory
 WORKDIR /app
@@ -41,5 +48,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY . .
 
-# Run the bot
-CMD ["python", "main.py"]
+# Run the start script instead of python directly
+CMD ["/app/start.sh"]
