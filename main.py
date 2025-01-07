@@ -292,7 +292,7 @@ async def on_message(message):
     urls = extract_urls(message.content)  # New function to extract all URLs
     if urls:
         for url in urls:
-            await message.add_reaction("�")
+            await message.add_reaction("📥")
 
     await bot.process_commands(message)
 
