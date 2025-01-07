@@ -323,7 +323,7 @@ async def on_reaction_add(reaction, user):
 def extract_urls(message_content: str) -> List[str]:
     """Extract all URLs from a message."""
     words = message_content.split()
-    return [word for word in words that starts with ("http://", "https://")]
+    return [word for word in words if word.startswith(("http://", "https://"))]
 
 # Update process_data_source to take explicit URL parameter
 @with_error_handling
