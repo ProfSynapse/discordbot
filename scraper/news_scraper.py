@@ -33,28 +33,32 @@ RSS_FEEDS = {
         "url": "https://www.technologyreview.com/feed/artificial-intelligence/rss/",
         "date_format": "rfc822"
     },
+        "Wired": {
+        "url": "https://www.wired.com/feed/tag/ai/latest/rss",
+        "date_format": "rfc822"
+    },
     "ArXiv AI": {
         "url": "http://export.arxiv.org/rss/cs.AI",
         "date_format": "arxiv"  # Special handling for arXiv
     },
     "Meditations on Alignment": {
-        "url": "https://professorsynapse.substack.com/",
+        "url": "https://professorsynapse.substack.com/feed",  # Fixed URL format
         "date_format": "rfc822"
     },
     "Gary Marcus": {
-        "url": "https://garymarcus.substack.com/feed",
+        "url": "https://garymarcus.substack.com/feed",  # Fixed URL format
         "date_format": "rfc822"
     },
     "One Useful Thing": {
-        "url": "https://oneusefulthing.substack.com/feed",
+        "url": "https://oneusefulthing.substack.com/feed",  # Fixed URL format
         "date_format": "rfc822"
     },
     "Prompthub": {
-        "url": "https://prompthub.substack.com/feed",
+        "url": "https://prompthub.substack.com/feed",  # Fixed URL format
         "date_format": "rfc822"
     },
-        "Astral Codex": {
-        "url": "https://astralcodexten.substack.com/feed",
+    "Astral Codex": {
+        "url": "https://astralcodexten.substack.com/feed",  # Fixed URL format
         "date_format": "rfc822"
     }
 }
@@ -124,10 +128,18 @@ def is_substack_feed(source: str, url: str) -> bool:
 # Fix the keyword error in fetch_feed function
 async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict) -> List[Dict]:
     try:
-        logger.info(f"Fetching {name} RSS feed")
+        logger.info(f"Fetching {name} RSS feed from {feed_info['url']}")  # Added URL to log
         async with session.get(feed_info["url"]) as response:
+            if response.status != 200:
+                logger.error(f"Failed to fetch {name} feed: HTTP {response.status}")
+                return []
+                
             content = await response.text()
             feed = feedparser.parse(content)
+            
+            if not feed.entries:
+                logger.warning(f"No entries found in feed for {name} at {feed_info['url']}")
+                return []
             
             articles = []
             is_substack = is_substack_feed(name, feed_info["url"])
