@@ -137,49 +137,35 @@ class DiscordBot(commands.Bot):
     def format_response(text: str) -> str:
         """
         Format the response text to ensure proper line breaks and spacing.
-        
-        Args:
-            text (str): The text to format
-        Returns:
-            str: Properly formatted text
         """
-        # Replace any variant of bullet points with standardized format
+        # First, fix the spacing between words
+        text = ' '.join(text.split())
+        
+        # Remove duplicate bullet points and standardize
+        text = re.sub(r'•\s*•\s*', '• ', text)
         text = re.sub(r'[•\-\*]\s*', '• ', text)
         
-        # Ensure proper spacing after bullet points
-        text = re.sub(r'•\s*([^\n])', r'• \1', text)
-        
-        # Add line breaks after each bullet point
-        text = re.sub(r'([^\n])(\s*•\s*)', r'\1\n\n• ', text)
-        
-        text = re.sub(r'[•\-\*]\s*', '• ', text)
-        
-        # Ensure proper spacing after bullet points
-        text = re.sub(r'•\s*([^\n])', r'• \1', text)
-        
-        # Fix spacing around headers
+        # Fix headers formatting
         text = re.sub(r'\*\*(.*?):\*\*', r'\n\n**\1:**\n', text)
         
-        # Add line breaks after each bullet point
-        text = re.sub(r'([^\n])(\s*•\s*)', r'\1\n\n• ', text)
+        # Add proper spacing after bullet points and ensure they're on new lines
+        text = re.sub(r'([^\n])\s*•\s*', r'\1\n\n• ', text)
+        text = re.sub(r'^\s*•\s*', '• ', text, flags=re.MULTILINE)
         
-        # Remove extra blank lines
-        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+        # Clean up any markdown formatting issues
+        text = re.sub(r'\s+([.,!?])', r'\1', text)
         
-        # Remove unwanted spaces
-        text = re.sub(r'\s+([.,!?])', r'\1', text)  # Remove spaces before punctuation
-        text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)  # Fix split numbers
-        text = re.sub(r'([a-zA-Z])\s+([a-zA-Z])', r'\1\2', text)  # Fix split words
+        # Fix extra spacing around bullet points
+        text = re.sub(r'\n{3,}•', '\n\n• ', text)
         
-        # Ensure proper spacing around lists
-        text = re.sub(r'\n{3,}•', '\n\n•', text)
+        # Remove triple or more newlines
+        text = re.sub(r'\n{3,}', '\n\n', text)
         
-        # Clean up any remaining spacing issues
+        # Ensure proper spacing around sections
+        text = re.sub(r'(\n\*\*.*?\*\*:)\n*', r'\1\n', text)
+        
+        # Clean up final whitespace
         text = text.strip()
-        
-        # Add final formatting touches
-        text = re.sub(r'^\s*•', '• ', text, flags=re.MULTILINE)  # Ensure space after bullet points
-        text = re.sub(r'\n{3,}', '\n\n', text)  # Final cleanup of multiple newlines
         
         return text
 
