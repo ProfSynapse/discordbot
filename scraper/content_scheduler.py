@@ -53,7 +53,8 @@ class ContentScheduler:
                 article = self.news_queue.pop(0)
                 try:
                     embed = self._create_news_embed(article)
-                    await self.news_channel.send(embed=embed)
+                    message = await self.news_channel.send(embed=embed)
+                    await message.add_reaction("📥")
                     logger.info(f"Posted startup news article: {article['title']}")
                 except Exception as e:
                     logger.error(f"Failed to post startup article: {e}")
@@ -70,7 +71,8 @@ class ContentScheduler:
                     )
                     embed.set_image(url=video['thumbnail_url'])
                     embed.set_footer(text=f"Posted by {video['author']}")
-                    await self.youtube_channel.send(embed=embed)
+                    message = await self.youtube_channel.send(embed=embed)
+                    await message.add_reaction("📥")
                     logger.info(f"Posted startup YouTube video: {video['title']}")
                 except Exception as e:
                     logger.error(f"Failed to post startup video: {e}")
