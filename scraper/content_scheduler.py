@@ -41,6 +41,7 @@ class ContentScheduler:
         self.youtube_channel = None
         self.scraped_urls = set()  # Moved here from news_scraper.py
         self.youtube = build('youtube', 'v3', developerKey=config.YOUTUBE_API_KEY)
+        self.posted_urls = set()  # Add this line to track posted URLs
 
     async def start(self) -> None:
         try:
@@ -190,7 +191,8 @@ class ContentScheduler:
         try:
             published = datetime.fromisoformat(article['published'])
             recent_enough = (datetime.now(published.tzinfo) - published) <= timedelta(hours=hours)
-            not_seen = article['url'] not in self.scraped_urls
+            not_seen = (article['url'] not in self.scraped_urls and 
+                       article['url'] not in self.posted_urls)
             if recent_enough and not_seen:
                 self.scraped_urls.add(article['url'])
                 return True
@@ -300,6 +302,7 @@ class ContentScheduler:
                                 # Simply post the URL
                                 message = await self.news_channel.send(article['url'])
                                 await message.add_reaction("📥")
+                                self.posted_urls.add(article['url'])  # Add URL to posted set
                                 logger.info(f"Posted article: {article['url']}")
                             except Exception as e:
                                 logger.error(f"Failed to post article: {e}")

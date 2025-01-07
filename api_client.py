@@ -244,8 +244,8 @@ class GPTTrainerAPI:
             data = {
                 'url': url,
                 'content': content,
-                'prompt': """Please provide a structured summary of this article in the following format:
-                           Title: [Article Title]
+                'prompt': """Provide a structured summary of this article in the following format:
+                           
                            Key Points:
                            - [First key point]
                            - [Second key point]

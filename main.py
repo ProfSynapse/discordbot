@@ -495,7 +495,7 @@ Here's the article content:
                 logger.debug("=============================")
                 
                 # Create embed with new formatting
-                formatted_message = f"**[{article_title}] Summary**\n[Read Article]({url})\n\n{formatted_response}"
+                formatted_message = f"**{article_title} Summary**\n[Read Article]({url})\n\n{formatted_response}"
                 embed = discord.Embed(
                     description=formatted_message,
                     color=discord.Color.blue()
