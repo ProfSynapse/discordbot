@@ -302,13 +302,21 @@ async def on_reaction_add(reaction, user):
     if user == bot.user:
         return
 
-    if reaction.emoji == "�":
-        # Extract URLs from the message
-        urls = extract_urls(reaction.message.content)
+    if reaction.emoji == "📥":  # Fix the emoji comparison
+        # Try to get URL from embed first, then message content
+        urls = []
+        if reaction.message.embeds:
+            embed = reaction.message.embeds[0]
+            if embed.url:  # Get URL from embed if it exists
+                urls.append(embed.url)
+        else:
+            urls = extract_urls(reaction.message.content)
+            
         if urls:
             for url in urls:
                 if url not in PROCESSED_URLS:
                     await process_data_source(reaction.message, url)
+                    logger.info(f"Processing URL from reaction: {url}")
                     PROCESSED_URLS.add(url)
 
 # Update extract_url function to extract_urls (plural)
