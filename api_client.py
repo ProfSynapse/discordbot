@@ -69,6 +69,14 @@ class GPTTrainerAPI:
             try:
                 async with self._lock:
                     async with self._session.request(method, url, **kwargs) as response:
+                        # Handle 409 Conflict as a special case
+                        if response.status == 409:
+                            return {
+                                'success': True,  # Consider it a success since the data exists
+                                'message': 'URL already exists in database',
+                                'status': 'existing'
+                            }
+                        
                         if response.status >= 500:
                             last_error = ServerError(f"Server error: {response.status} - Attempt {attempt + 1}/{retries}")
                             if attempt < retries - 1:
@@ -201,20 +209,25 @@ class GPTTrainerAPI:
                 return "I'm having trouble processing your request. Please try again in a moment."
 
     async def upload_data_source(self, url: str) -> Dict[str, Any]:
-        """
-        Upload a URL to the chatbot's knowledge base.
-        Just sends the URL to GPT Trainer's database.
-        """
+        """Upload a URL to the chatbot's knowledge base."""
         endpoint = f'chatbot/{config.CHATBOT_UUID}/data-source/url'
         try:
             logging.info(f"Uploading URL to GPT Trainer database: {url}")
-            response = await self._make_request('POST', endpoint, json={
-                'url': url,
-            })
+            response = await self._make_request('POST', endpoint, json={'url': url})
+            
+            if response.get('status') == 'existing':
+                logging.info(f"URL already exists in database: {url}")
+                return {
+                    'success': True,
+                    'message': 'URL already exists in database',
+                    'existing': True
+                }
+                
             logging.info(f"Upload response from GPT Trainer: {response}")
             return {
                 'success': True,
-                'data': response
+                'data': response,
+                'existing': False
             }
         except Exception as e:
             logging.error(f"Failed to upload URL: {e}", exc_info=True)

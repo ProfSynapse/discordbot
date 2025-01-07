@@ -367,6 +367,14 @@ async def process_data_source(message, url: str):
                 logger.error(f"Failed to upload to knowledge base: {error_msg}")
                 await processing_msg.edit(content=f"❌ Failed to add to my knowledge base: {error_msg}")
                 return
+                
+            # Handle case where URL already exists
+            if upload_result.get('existing'):
+                await processing_msg.edit(content="📚 This article is already in my knowledge base!")
+                PROCESSED_URLS.add(url)
+                return
+            
+            # Continue with normal processing for new URLs
             
             # Step 2: Scrape article content
             logger.info("Scraping article content...")
