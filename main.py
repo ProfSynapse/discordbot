@@ -137,30 +137,53 @@ class DiscordBot(commands.Bot):
     def format_response(text: str) -> str:
         """Format the response text to ensure proper line breaks and spacing."""
         # Log the raw response first
-        logger.debug(f"Raw response before formatting:\n{text}")
+        logger.debug("=== Raw Response Before Formatting ===")
+        logger.debug(text)
+        logger.debug("=====================================")
         
-        # First, normalize newlines and clean up initial whitespace
+        # First, normalize newlines and remove extra spaces
         text = text.replace('\r\n', '\n').replace('\r', '\n')
-        text = ' '.join(text.split())  # Normalize spaces
+        text = re.sub(r'\s+', ' ', text)  # Normalize all whitespace first
         
-        # Fix bullet points first
-        text = re.sub(r'•\s*•\s*', '• ', text)  # Remove double bullets
-        text = re.sub(r'[•\-\*]+\s*', '• ', text)  # Standardize all bullet points
+        # Fix common formatting issues
+        text = (text
+            .replace(' •', '\n•')  # Ensure bullets start on new lines
+            .replace('• •', '•')    # Remove double bullets
+            .replace('•-', '•')     # Remove bullet-dash combinations
+            .replace('-•', '•')     # Remove dash-bullet combinations
+        )
         
-        # Add proper line breaks around headers and sections
-        text = re.sub(r'\*\*(.*?):\*\*', r'\n\n**\1:**\n', text)
+        # Fix section headers
+        sections = ['Main Points:', 'Why This Matters:', 'Key Implications:']
+        for section in sections:
+            text = text.replace(section, f"\n\n{section}\n")
         
-        # Ensure bullet points are on new lines
-        text = re.sub(r'([^•])\s*•\s*', r'\1\n\n• ', text)  # Add newlines before bullets
-        text = re.sub(r'(• .*?)(?=\s*•|\s*\*\*|$)', r'\1\n', text)  # Add newlines after bullets
+        # Ensure proper spacing after bullets
+        text = re.sub(r'•\s*', '• ', text)
         
-        # Clean up extra whitespace
-        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)  # Remove triple newlines
-        text = re.sub(r'^\s+', '', text, flags=re.MULTILINE)  # Remove leading spaces
+        # Fix split words (like "K GC" → "KGC")
+        common_splits = [
+            (r'K GC', 'KGC'),
+            (r'L LMs?', 'LLM'),
+            (r'G PTs?', 'GPT'),
+            (r'A Is?', 'AI')
+        ]
+        for pattern, replacement in common_splits:
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+        
+        # Clean up excessive newlines
+        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+        
+        # Ensure proper spacing around sections
+        text = text.replace('\n•', '\n• ')
+        
+        # Clean up final result
         text = text.strip()
         
         # Log the formatted response
-        logger.debug(f"Formatted response:\n{text}")
+        logger.debug("=== Formatted Response ===")
+        logger.debug(text)
+        logger.debug("=========================")
         
         return text
 
@@ -453,14 +476,23 @@ Here's the article content:
             
             response = await client.get_response(session_uuid, prompt)
             
+            # Add debug logging for raw API response
+            logger.debug("=== Raw API Response ===")
+            logger.debug(response)
+            logger.debug("======================")
+            
             if response:
                 # Get and clean the title
                 article_title = extract_title_from_content(article_content) or "Article Analysis"
                 article_title = clean_article_title(article_title)
                 
-                # Format the message with clean title
+                # Format the response with clean title
                 formatted_response = bot.format_response(response)
-                formatted_message = f"**[{article_title}]({url})**\n\n{formatted_response}"
+                
+                # Log the final message before sending
+                logger.debug("=== Final Formatted Message ===")
+                logger.debug(formatted_response)
+                logger.debug("=============================")
                 
                 # Create embed with formatted response
                 embed = discord.Embed(
