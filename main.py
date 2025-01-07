@@ -13,12 +13,14 @@ from discord.ext import commands
 from discord import app_commands  # Add this import
 import textwrap
 import logging
+from typing import List, Callable, Any  # Add List import
 from api_client import api_client, APIResponseError
 from config import config
 from scraper.content_scheduler import ContentScheduler  # Updated import
 from openai import OpenAI
 from enum import Enum
 from scraper.content_scraper import scrape_article_content
+from functools import wraps  # Add for decorator
 
 # Configure more detailed logging
 logging.basicConfig(
@@ -30,6 +32,17 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Add decorator definition
+def with_error_handling(func: Callable) -> Callable:
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Error in {func.__name__}: {e}")
+            raise
+    return wrapper
 
 class ImageSize(Enum):
     SQUARE = "1024x1024"
@@ -108,13 +121,14 @@ class DiscordBot(commands.Bot):
         Args:
             message (discord.Message): The message containing the URL to process
         """
-        url = extract_url(message.content)
-        if url:
+        urls = extract_urls(message.content)  # Change to use new extract_urls function
+        if urls:
             async with api_client as client:
-                if await client.upload_data_source(url):
-                    await message.channel.send(f"URL '{url}' has been processed.")
-                else:
-                    await message.channel.send("An error occurred while processing the URL.")
+                for url in urls:
+                    if await client.upload_data_source(url):
+                        await message.channel.send(f"URL '{url}' has been processed.")
+                    else:
+                        await message.channel.send("An error occurred while processing the URL.")
         else:
             await message.channel.send("No valid URL found in the message.")
 
@@ -265,38 +279,49 @@ def chunk_message_by_paragraphs(message, max_length=2000):
         return [f"Part {i}/{len(chunks)}:\n{chunk}" for i, chunk in enumerate(chunks, 1)]
     return chunks
 
+# Add at the top level, after imports
+PROCESSED_URLS = set()
+
+# Replace on_message event handler
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
 
-    if any(url in message.content for url in ["http://", "https://"]):
-        await message.add_reaction("📚")
+    # Check for URLs in message content
+    urls = extract_urls(message.content)  # New function to extract all URLs
+    if urls:
+        for url in urls:
+            await message.add_reaction("�")
 
     await bot.process_commands(message)
 
+# Replace on_reaction_add event handler
 @bot.event
 async def on_reaction_add(reaction, user):
     if user == bot.user:
         return
 
-    if reaction.emoji == "📚":
-        await process_data_source(reaction.message)
+    if reaction.emoji == "�":
+        # Extract URLs from the message
+        urls = extract_urls(reaction.message.content)
+        if urls:
+            for url in urls:
+                if url not in PROCESSED_URLS:
+                    await process_data_source(reaction.message, url)
+                    PROCESSED_URLS.add(url)
 
-# Add error handling decorator for background tasks
-def with_error_handling(func):
-    async def wrapper(*args, **kwargs):
-        try:
-            return await func(*args, **kwargs)
-        except Exception as e:
-            logging.error(f"Error in background task {func.__name__}: {e}")
-    return wrapper
+# Update extract_url function to extract_urls (plural)
+def extract_urls(message_content: str) -> List[str]:
+    """Extract all URLs from a message."""
+    words = message_content.split()
+    return [word for word in words if word.startswith(("http://", "https://"))]
 
+# Update process_data_source to take explicit URL parameter
 @with_error_handling
-async def process_data_source(message):
+async def process_data_source(message, url: str):
     """Process a message containing a URL."""
-    url = extract_url(message.content)
-    if not url:
+    if url in PROCESSED_URLS:
         return
         
     # Send initial processing message
@@ -324,30 +349,14 @@ async def process_data_source(message):
                 color=discord.Color.blue()
             )
             embed.add_field(name="Summary", value=summary, inline=False)
-            embed.set_footer(text="Article added to my knowledge base! 📚")
+            embed.set_footer(text="Article added to my knowledge base! �")
             
             await processing_msg.edit(content=None, embed=embed)
+            PROCESSED_URLS.add(url)
             
     except Exception as e:
         logger.error(f"Error processing article: {e}")
         await processing_msg.edit(content="❌ An error occurred while processing the article.")
-
-def extract_url(message_content):
-    """
-    Extract the first URL found in a message.
-
-    Args:
-        message_content (str): The message content to search
-
-    Returns:
-        str|None: The first URL found or None if no URL is present
-    """
-    # Extract the first URL from the message content
-    words = message_content.split()
-    for word in words:
-        if word.startswith("http://") or word.startswith("https://"):
-            return word
-    return None
 
 if __name__ == "__main__":
     bot.run(config.DISCORD_TOKEN)

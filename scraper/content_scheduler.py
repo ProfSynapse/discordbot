@@ -206,12 +206,15 @@ class ContentScheduler:
         if 'summary' in article:
             embed.description = self._format_summary(article['summary'])
             
-        if article.get('image_url'):
-            embed.set_image(url=article['image_url'])
-            
         source = article.get('source', 'Unknown source')
-        date_str = self._format_date(article.get('published', 'Unknown date'))
-        embed.set_footer(text=f"Published {date_str} • {source}")
+        # Convert date to YYYY-MM-DD format
+        try:
+            date = datetime.fromisoformat(article.get('published', ''))
+            date_str = date.strftime('%Y-%m-%d')
+        except:
+            date_str = 'Unknown date'
+        
+        embed.set_footer(text=f"{date_str} • {source}")
         
         return embed
 
@@ -297,7 +300,8 @@ class ContentScheduler:
                             article = self.news_queue.pop(0)
                             try:
                                 embed = self._create_news_embed(article)
-                                await self.news_channel.send(embed=embed)
+                                message = await self.news_channel.send(embed=embed)
+                                await message.add_reaction("📥")
                                 logger.info(f"Posted article: {article['title']}")
                             except Exception as e:
                                 logger.error(f"Failed to post article: {e}")
@@ -348,7 +352,8 @@ class ContentScheduler:
                                 )
                                 embed.set_image(url=video['thumbnail_url'])
                                 embed.set_footer(text=f"Posted by {video['author']}")
-                                await self.youtube_channel.send(embed=embed)
+                                message = await self.youtube_channel.send(embed=embed)
+                                await message.add_reaction("📥")
                                 logger.info(f"Posted YouTube video: {video['title']}")
                             except Exception as e:
                                 logger.error(f"Failed to post video: {e}")
