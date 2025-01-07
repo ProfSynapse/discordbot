@@ -291,8 +291,6 @@ class ContentScheduler:
                     if items_to_post > 0:
                         # Calculate average delay between posts
                         base_delay = time_window / items_to_post
-                        
-                        # Add randomness but keep within reasonable bounds
                         delay = random.uniform(base_delay * 0.7, base_delay * 1.3)
                         logger.info(f"News: Waiting {delay/60:.1f} minutes until next post")
                         
@@ -301,15 +299,15 @@ class ContentScheduler:
                         if self.news_channel and self.news_queue:
                             article = self.news_queue.pop(0)
                             try:
-                                # Simplified message - just post the URL
-                                message = await self.news_channel.send(f"🔍 New article: {article['url']}")
+                                # Simply post the URL
+                                message = await self.news_channel.send(article['url'])
                                 await message.add_reaction("📥")
-                                logger.info(f"Posted article link: {article['url']}")
+                                logger.info(f"Posted article: {article['url']}")
                             except Exception as e:
                                 logger.error(f"Failed to post article: {e}")
                                 self.news_queue.insert(0, article)
                     else:
-                        await asyncio.sleep(300)  # Check every 5 minutes if queue empty
+                        await asyncio.sleep(300)
                 else:
                     await asyncio.sleep(300)
                     
