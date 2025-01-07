@@ -12,7 +12,17 @@ async def scrape_article_content(url: str) -> Optional[str]:
     """
     browser = None
     try:
-        browser = await launch(headless=True)
+        browser = await launch(
+            headless=True,
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
+                '--window-size=1920x1080',
+            ]
+        )
         page = await browser.newPage()
         
         # Set timeout to 30 seconds
@@ -66,22 +76,11 @@ async def scrape_article_content(url: str) -> Optional[str]:
         
     except Exception as e:
         logger.error(f"Error scraping article content: {e}")
-        if browser:
-            await browser.close()
         return None
-            content = re.sub(r'\s+', ' ', content).strip()  # Remove extra whitespace
+        
     finally:
         if browser:
             try:
                 await browser.close()
             except:
                 pass
-
-            content = re.sub(r'Share\s*this[\s\S]*$', '', content)  # Remove sharing section
-            return content
-            
-        return None
-        
-    except Exception as e:
-        logger.error(f"Error scraping article content: {e}")
-        return None
