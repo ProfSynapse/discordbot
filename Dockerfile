@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Install Chrome dependencies, Xvfb, and DBus
+# Install Chrome dependencies, Xvfb, DBus and X11 libraries
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -26,6 +26,12 @@ RUN apt-get update && apt-get install -y \
     xvfb \
     dbus \
     dbus-x11 \
+    libxtst6 \
+    libx11-xcb1 \
+    libxcb-dri3-0 \
+    libxss1 \
+    libxext6 \
+    libnss3-tools \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 

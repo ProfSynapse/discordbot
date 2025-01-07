@@ -40,6 +40,9 @@ async def scrape_article_content(url: str, max_retries: int = 3) -> Optional[str
                 '--disable-component-extensions-with-background-pages',
                 '--disable-ipc-flooding-protection',
                 '--enable-features=NetworkService,NetworkServiceInProcess',
+                '--window-size=1920x1080',
+                '--disable-gpu-sandbox',
+                '--disable-dev-profile'
             ]
 
             browser = await launch(
@@ -50,8 +53,16 @@ async def scrape_article_content(url: str, max_retries: int = 3) -> Optional[str
                 handleSIGHUP=False,
                 ignoreHTTPSErrors=True,
                 dumpio=True,
-                timeout=120000  # Increase timeout to 120 seconds
+                timeout=120000,  # 120 second timeout
+                env={
+                    'DISPLAY': ':99',
+                    'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/var/run/dbus/system_bus_socket',
+                    'NO_SANDBOX': '1'
+                }
             )
+
+            # After browser launch, add a small delay
+            await asyncio.sleep(2)
 
             # Set up a new page with longer timeout
             page = await browser.newPage()
