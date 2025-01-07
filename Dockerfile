@@ -34,12 +34,12 @@ RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd6
     && rm google-chrome-stable_current_amd64.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a wrapper script to launch Xvfb and the bot
-RUN echo '#!/bin/bash\nXvfb :99 -screen 0 1024x768x16 &\nexport DISPLAY=:99\npython main.py' > /app/start.sh \
-    && chmod +x /app/start.sh
-
-# Set working directory
+# Set working directory first
 WORKDIR /app
+
+# Create start script in a more reliable way
+RUN printf '#!/bin/bash\nXvfb :99 -screen 0 1024x768x16 &\nsleep 1\nexport DISPLAY=:99\nexec python main.py\n' > start.sh \
+    && chmod +x start.sh
 
 # Copy requirements and install dependencies
 COPY requirements.txt .
@@ -48,5 +48,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY . .
 
-# Run the start script instead of python directly
-CMD ["/app/start.sh"]
+# Run the start script
+CMD ["./start.sh"]
