@@ -29,27 +29,32 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Configure DBus
+# Configure DBus and machine-id properly
 RUN mkdir -p /var/run/dbus && \
-    dbus-uuidgen > /var/lib/dbus/machine-id
+    mkdir -p /var/lib/dbus && \
+    dbus-uuidgen > /var/lib/dbus/machine-id && \
+    ln -sf /var/lib/dbus/machine-id /etc/machine-id
 
-# Install Chrome
+# Install Chrome with sandbox
 RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
     && apt-get update \
     && apt-get install -y ./google-chrome-stable_current_amd64.deb \
     && rm google-chrome-stable_current_amd64.deb \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r chrome && useradd -r -g chrome -G audio,video chrome \
+    && mkdir -p /home/chrome && chown -R chrome:chrome /home/chrome
 
-# Set working directory first
+# Set working directory
 WORKDIR /app
 
-# Create start script with DBus
+# Create a more robust start script
 RUN printf '#!/bin/bash\n\
-mkdir -p /var/run/dbus\n\
+mkdir -p /run/dbus\n\
 dbus-daemon --system --fork\n\
-Xvfb :99 -screen 0 1024x768x16 &\n\
+Xvfb :99 -screen 0 1024x768x16 -ac &\n\
 sleep 2\n\
 export DISPLAY=:99\n\
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket\n\
 exec python main.py\n' > start.sh && chmod +x start.sh
 
 # Copy requirements and install dependencies
