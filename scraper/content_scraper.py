@@ -1,51 +1,70 @@
 import logging
-import aiohttp
-from bs4 import BeautifulSoup
-from typing import Optional, Dict
+from typing import Optional
 import re
+from pyppeteer import launch
 
 logger = logging.getLogger(__name__)
 
-async def scrape_article_content(url: str) -> Optional[Dict[str, str]]:
+async def scrape_article_content(url: str) -> Optional[str]:
     """
-    Scrape article content using basic aiohttp and BeautifulSoup.
-    Returns dict with 'title' and 'content' if successful, None if failed.
+    Scrapes article content using Pyppeteer.
+    Returns the main article text content.
     """
     try:
-        async with aiohttp.ClientSession() as session:
-            logger.info(f"Fetching content from: {url}")
-            async with session.get(url) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to fetch URL: {url}, status: {response.status}")
-                    return None
+        browser = await launch(headless=True)
+        page = await browser.newPage()
+        
+        # Set timeout to 30 seconds
+        await page.setDefaultNavigationTimeout(30000)
+        
+        # Navigate to the page
+        await page.goto(url)
+        
+        # Wait for content to load
+        await page.waitForSelector('article, [role="article"], .article, .post-content, .entry-content', 
+                                 timeout=5000)
+        
+        # Try different selectors for article content
+        content = await page.evaluate('''
+            () => {
+                // Common article content selectors
+                const selectors = [
+                    'article', 
+                    '[role="article"]',
+                    '.article-content',
+                    '.post-content',
+                    '.entry-content',
+                    'main'
+                ];
                 
-                html = await response.text()
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # Get title
-                title = soup.title.string if soup.title else ""
-                
-                # Try to get main content
-                # Remove script and style elements
-                for script in soup(["script", "style", "nav", "header", "footer"]):
-                    script.decompose()
-                
-                # Get text
-                content = soup.get_text()
-                
-                # Clean up text
-                lines = (line.strip() for line in content.splitlines())
-                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-                content = '\n'.join(chunk for chunk in chunks if chunk)
-                
-                # Remove excessive newlines
-                content = re.sub(r'\n\s*\n', '\n\n', content)
-                
-                return {
-                    'title': title.strip(),
-                    'content': content.strip()
+                for (const selector of selectors) {
+                    const element = document.querySelector(selector);
+                    if (element) {
+                        // Remove unwanted elements
+                        const unwanted = element.querySelectorAll(
+                            'script, style, nav, header, footer, .social-share, .advertisement'
+                        );
+                        unwanted.forEach(el => el.remove());
+                        
+                        return element.textContent;
+                    }
                 }
                 
+                // Fallback: get body content
+                return document.body.textContent;
+            }
+        ''')
+        
+        await browser.close()
+        
+        if content:
+            # Clean up the content
+            content = re.sub(r'\s+', ' ', content).strip()  # Remove extra whitespace
+            content = re.sub(r'Share\s*this[\s\S]*$', '', content)  # Remove sharing section
+            return content
+            
+        return None
+        
     except Exception as e:
-        logger.error(f"Error scraping article content: {e}", exc_info=True)
+        logger.error(f"Error scraping article content: {e}")
         return None

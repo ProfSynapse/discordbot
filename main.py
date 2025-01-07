@@ -333,7 +333,7 @@ async def process_data_source(message, url: str):
         await message.channel.send(f"📚 I've already processed {url}")
         return
         
-    processing_msg = await message.channel.send("📤 Uploading to knowledge base...")
+    processing_msg = await message.channel.send("📤 Processing article...")
     
     try:
         # Step 1: Upload URL to GPT Trainer
@@ -346,10 +346,32 @@ async def process_data_source(message, url: str):
                 await processing_msg.edit(content="❌ Failed to add to my knowledge base.")
                 return
             
-            # If upload successful, mark it as processed immediately
+            # Step 2: Scrape article content
+            logger.info("Scraping article content...")
+            content = await scrape_article_content(url)
+            
+            if not content:
+                await processing_msg.edit(content="✅ Added to knowledge base! (Could not generate summary)")
+                PROCESSED_URLS.add(url)
+                return
+                
+            # Step 3: Generate summary
+            logger.info("Generating summary...")
+            summary = await client.summarize_content(url, content)
+            
+            if summary:
+                embed = discord.Embed(
+                    title="Article Summary",
+                    description=summary,
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Source", value=f"[Link]({url})", inline=False)
+                await processing_msg.edit(content="✅ Added to knowledge base!", embed=embed)
+            else:
+                await processing_msg.edit(content="✅ Added to knowledge base! (Summary generation failed)")
+            
+            # Mark as processed
             PROCESSED_URLS.add(url)
-            logger.info(f"Successfully uploaded URL: {url}")
-            await processing_msg.edit(content="✅ Added to knowledge base!")
 
     except Exception as e:
         logger.error(f"Error in process_data_source: {e}")
