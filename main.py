@@ -345,33 +345,12 @@ async def process_data_source(message, url: str):
                 logger.error(f"Failed to upload to knowledge base: {upload_result['error']}")
                 await processing_msg.edit(content="❌ Failed to add to my knowledge base.")
                 return
-                
-            await processing_msg.edit(content="✅ Added to knowledge base! Now generating summary...")
-            logger.info(f"Successfully uploaded URL: {url}")
             
-            # Step 2: Try to get a summary
-            try:
-                # Scrape content first
-                content = await scrape_article_content(url)
-                if content:
-                    summary = await client.summarize_content(url, content['content'])
-                    embed = discord.Embed(
-                        title=content.get('title', 'Article Summary'),
-                        url=url,
-                        color=discord.Color.green()
-                    )
-                    embed.add_field(name="Summary", value=summary, inline=False)
-                    embed.set_footer(text="✅ Added to my knowledge base!")
-                    await processing_msg.edit(content=None, embed=embed)
-                else:
-                    await processing_msg.edit(content="✅ Added to knowledge base! (Couldn't generate summary)")
-            except Exception as e:
-                logger.error(f"Summary generation failed: {e}")
-                await processing_msg.edit(content="✅ Added to knowledge base! (Summary generation failed)")
-            
+            # If upload successful, mark it as processed immediately
             PROCESSED_URLS.add(url)
-            logger.info(f"Completed processing for: {url}")
-            
+            logger.info(f"Successfully uploaded URL: {url}")
+            await processing_msg.edit(content="✅ Added to knowledge base!")
+
     except Exception as e:
         logger.error(f"Error in process_data_source: {e}")
         await processing_msg.edit(content=f"❌ Error: {str(e)}")
