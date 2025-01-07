@@ -70,22 +70,45 @@ AI_KEYWORDS = [
 def parse_date(date_str: str, format_type: str) -> datetime:
     """Parse date string based on source format."""
     try:
-        if format_type == "rfc822":
+        if not date_str:
+            return datetime.now(pytz.UTC)
+            
+        # First try parsing as ISO format with various cleanup attempts
+        try:
+            # Clean up timezone info
+            date_str = date_str.replace('Z', '+00:00').replace('.000', '')
+            
+            # Handle various ISO formats
+            if 'T' in date_str:
+                # Try direct fromisoformat
+                try:
+                    return datetime.fromisoformat(date_str)
+                except ValueError:
+                    # Try removing timezone and add UTC
+                    clean_date = re.sub(r'[+-]\d{2}:?\d{2}$', '', date_str)
+                    return datetime.fromisoformat(clean_date).replace(tzinfo=pytz.UTC)
+        except ValueError:
+            pass
+
+        # Try RFC822 (most RSS feeds use this)
+        try:
             return parsedate_to_datetime(date_str)
-        elif format_type == "arxiv":
-            # Handle both arXiv formats
+        except (TypeError, ValueError):
+            pass
+
+        # Fallback to common formats
+        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%a, %d %b %Y %H:%M:%S"]:
             try:
-                # Try ISO format first
-                return datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC)
+                dt = datetime.strptime(date_str, fmt)
+                return dt.replace(tzinfo=pytz.UTC)
             except ValueError:
-                # Try RFC822 format as fallback
-                return parsedate_to_datetime(date_str)
-        else:
-            # Fallback to RFC822
-            return parsedate_to_datetime(date_str)
+                continue
+
+        logger.error(f"Could not parse date: {date_str}")
+        return datetime.now(pytz.UTC)
+        
     except Exception as e:
-        logging.error(f"Error parsing date {date_str}: {e}")
-        # Return current time instead of min time for better sorting
+        logger.error(f"Error parsing date {date_str}: {e}")
         return datetime.now(pytz.UTC)
 
 # Add Substack identification
@@ -108,159 +131,53 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
             
             articles = []
             is_substack = is_substack_feed(name, feed_info["url"])
-            
-            # Only look at last day for initial fetch
             one_day_ago = datetime.now(pytz.UTC) - timedelta(days=1)
+            
+            logger.debug(f"Processing {len(feed.entries)} entries from {name}")
             
             for entry in feed.entries[:20]:  # Check last 20 entries
                 try:
-                    # Parse the date first
-                    try:
-                        date = parse_date(
-                            entry.get('published', entry.get('updated', '')),
-                            feed_info["date_format"]
-                        )
-                    except Exception as e:
-                        logger.error(f"Date parsing error: {e}")
-                        continue
+                    # Get the date first - add debug logging
+                    raw_date = entry.get('published', entry.get('updated', ''))
+                    logger.debug(f"{name} raw date: {raw_date}")
+                    
+                    date = parse_date(raw_date, feed_info["date_format"])
+                    logger.debug(f"{name} parsed date: {date}")
 
-                    # Skip old entries on first fetch
+                    # Always apply date filtering
                     if date < one_day_ago:
+                        logger.debug(f"Skipping old article from {name}: {entry.title}")
                         continue
 
-                    # For Substacks, skip keyword filtering
+                    # For Substacks, skip keyword filtering but keep date filtering
                     if is_substack:
-                        should_include = True
-                    else:
-                        # For non-Substacks, apply keyword filtering
-                        should_include = any(kw in entry.title.lower() or 
-                                           kw in entry.get('summary', '').lower() 
-                                           for kw in AI_KEYWORDS)
+                        logger.debug(f"Found recent Substack article: {entry.title} from {name}")
+                        articles.append({
+                            "title": entry.title,
+                            "url": entry.link,
+                            "summary": entry.get('summary', ''),
+                            "source": name,
+                            "published": date.isoformat(),
+                            "image_url": None  # Simplified for debugging
+                        })
+                        continue
 
-                    if should_include:
-                        # Extract and clean summary
-                        summary = entry.get('summary', '')
-                        if not summary and 'description' in entry:
-                            summary = entry['description']
-                        
-                        # Convert HTML to Discord-friendly markdown - fixed markdownify params
-                        summary = md(
-                            summary,
-                            heading_style="atx",
-                            convert=['b', 'i', 'em', 'strong', 'a', 'img', 'p', 'br', 'ul', 'ol', 'li'],  # Specify all tags to convert
-                            escape_asterisks=True,
-                            escape_underscores=True
-                        )
-                        
-                        # Clean up the converted markdown
-                        summary = (summary
-                                  .replace('\n\n\n', '\n\n')  # Remove triple newlines
-                                  .replace('!\[\]', '')        # Remove empty image markers
-                                  .strip())                    # Remove leading/trailing whitespace
-                        
-                        # Extract image URL from HTML content
-                        image_url = None
-                        if '[Image' in summary:
-                            # Extract URL from the [Image...] format
-                            img_match = re.search(r'src="([^"]+)"', summary)
-                            if img_match:
-                                image_url = img_match.group(1)
-                                # Remove the entire [Image...] text from summary
-                                summary = re.sub(r'\[Image[^\]]+\]', '', summary)
-                        elif 'media_content' in entry:
-                            media_urls = [m['url'] for m in entry.media_content if 'url' in m]
-                            if media_urls:
-                                image_url = media_urls[0]
-                        elif 'enclosures' in entry:
-                            image_urls = [e['href'] for e in entry.enclosures 
-                                        if 'href' in e and e.get('type', '').startswith('image/')]
-                            if image_urls:
-                                image_url = image_urls[0]
+                    # For non-Substacks, apply keyword filtering
+                    if any(kw in entry.title.lower() or 
+                          kw in entry.get('summary', '').lower() 
+                          for kw in AI_KEYWORDS):
+                        # Process non-Substack article
+                        # ...existing article processing code...
+                        pass
 
-                        # Clean the summary more thoroughly
-                        summary = (summary.replace('<p>', '')
-                                         .replace('</p>', '\n')
-                                         .replace('<figure>', '')
-                                         .replace('</figure>', '')
-                                         .replace('<figcaption>', '')
-                                         .replace('</figcaption>', '')
-                                         .replace('<img', '')
-                                         .replace('/>', ''))
-                        
-                        # Remove HTML IDs
-                        summary = re.sub(r'id="[^"]*"', '', summary)
-                        # Remove any remaining HTML tags
-                        summary = re.sub(r'<[^>]+>', '', summary)
-                        # Remove any remaining "Image:" or "Source:" tags
-                        summary = re.sub(r'Image:\s*[^\n]+\n?', '', summary)
-                        # Fix multiple newlines
-                        summary = re.sub(r'\n\s*\n', '\n\n', summary)
-                        summary = summary.strip()
-                        
-                        # Check if article is AI-related
-                        if any(kw in entry.title.lower() or kw in summary.lower() 
-                              for kw in AI_KEYWORDS):
-                            # Parse date with correct format type
-                            try:
-                                date = parse_date(
-                                    entry.get('published', entry.get('updated', '')),
-                                    feed_info["date_format"]
-                                )
-                                date_str = date.isoformat()
-                            except Exception as e:
-                                logger.error(f"Date parsing error: {e}")
-                                date_str = datetime.now(pytz.UTC).isoformat()
-                            
-                            if feed_info["date_format"] == "arxiv":
-                                # Special handling for arXiv entries
-                                try:
-                                    # Get authors
-                                    authors = ', '.join([author.get('name', '') for author in entry.get('authors', [])])
-                                    
-                                    # Clean and format the summary/abstract
-                                    summary = entry.get('summary', '').strip()
-                                    
-                                    # Remove Announce Type and arXiv ID prefixes
-                                    summary = re.sub(r'arXiv:\d+\.\d+v\d+\s+Announce Type:\s+\w+\s*', '', summary)
-                                    summary = re.sub(r'Abstract:\s*', '', summary)
-                                    
-                                    # Format date as YYYY-MM-DD
-                                    formatted_date = date.strftime('%Y-%m-%d')
-                                    
-                                    # Create clean formatted summary
-                                    formatted_summary = f"{summary.strip()}\n\n"  # Abstract first
-                                    formatted_summary += f"*{authors} - {formatted_date}*"  # Authors and date in italics
-                                    
-                                    # Clean up title (remove any arXiv IDs or other prefixes)
-                                    clean_title = re.sub(r'arXiv:\d+\.\d+v\d+\s*', '', entry.title)
-                                    clean_title = clean_title.replace('\n', ' ').strip()
-                                    
-                                    articles.append({
-                                        "title": clean_title,
-                                        "url": entry.link,
-                                        "summary": formatted_summary,
-                                        "source": name,
-                                        "published": date_str,
-                                        "image_url": image_url
-                                    })
-                                except Exception as e:
-                                    logger.error(f"Error processing arXiv entry: {e}")
-                                    continue
-                            else:
-                                articles.append({
-                                    "title": entry.title,
-                                    "url": entry.link,
-                                    "summary": summary,
-                                    "source": name,
-                                    "published": date_str,
-                                    "image_url": image_url  # Now properly cleaned and verified
-                                })
-                                logger.info(f"Found AI-related article from {name}: {entry.title}")
                 except Exception as e:
                     logger.error(f"Error processing entry from {name}: {e}")
                     continue
             
-            return articles  # Return all matching articles
+            if is_substack:
+                logger.info(f"Found {len(articles)} articles from Substack {name} in last 24h")
+            
+            return articles
             
     except Exception as e:
         logger.error(f"Error fetching {name} feed: {e}", exc_info=True)

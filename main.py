@@ -437,121 +437,13 @@ async def process_data_source(message, url: str):
                 await processing_msg.edit(content="📚 This article is already in my knowledge base!")
                 PROCESSED_URLS.add(url)
                 return
-            
-            # Step 2: Scrape article content
-            logger.info("Scraping article content...")
-            article_content = await scrape_article_content(url)  # Changed variable name from content to article_content
-            
-            if not article_content:
-                logger.warning(f"Could not scrape content from {url}")
-                await processing_msg.edit(content="❌ Could not read the article content")
-                return
-            
-            # Step 3: Generate response using chat completion
-            logger.info("Generating response...")
-            session_uuid = await client.create_chat_session()
-            
-            prompt = f"""Analyze this article and provide a well-structured response using exact formatting:
-
-**Main Points:**
-• First main point
-• Second main point
-• Third main point
-
-**Why This Matters:**
-• First reason
-• Second reason
-• Third reason
-
-**Key Implications:**
-• First implication
-• Second implication
-• Third implication
-
-Important: Use single bullet points (•) and ensure each point starts on a new line.
-
-Here's the article content:
-{article_content[:4000]}
-"""
-            
-            response = await client.get_response(session_uuid, prompt)
-            
-            # Add debug logging for raw API response
-            logger.debug("=== Raw API Response ===")
-            logger.debug(response)
-            logger.debug("======================")
-            
-            if response:
-                # Get and clean the title
-                article_title = extract_title_from_content(article_content) or "Article Analysis"
-                article_title = clean_article_title(article_title)
                 
-                # Format the response with clean title
-                formatted_response = bot.format_response(response)
-                
-                # Log the final message before sending
-                logger.debug("=== Final Formatted Message ===")
-                logger.debug(formatted_response)
-                logger.debug("=============================")
-                
-                # Create embed with new formatting
-                formatted_message = f"**{article_title} Summary**\n[Read Article]({url})\n\n{formatted_response}"
-                embed = discord.Embed(
-                    description=formatted_message,
-                    color=discord.Color.blue()
-                )
-                await processing_msg.edit(content="✅ Here's my analysis:", embed=embed)
-            else:
-                await processing_msg.edit(content="❌ Failed to analyze the article")
-            
+            await processing_msg.edit(content=f"✅ Added to my knowledge base: {url}")
             PROCESSED_URLS.add(url)
 
     except Exception as e:
         logger.error(f"Error in process_data_source: {e}", exc_info=True)
         await processing_msg.edit(content=f"❌ Error: {str(e)}")
-
-def clean_article_title(title: str) -> str:
-    """
-    Clean up article titles by removing common prefixes, brackets, etc.
-    
-    Args:
-        title (str): The raw title to clean
-        
-    Returns:
-        str: Cleaned title
-    """
-    # Remove arXiv patterns
-    title = re.sub(r'arXiv:\s*\d+\.\d+v\d+\s*', '', title)
-    title = re.sub(r'\[.*?\]\s*', '', title)  # Remove any bracketed text
-    
-    # Remove category prefixes
-    title = re.sub(r'^(CS|AI|ML|Computer Science|Artificial Intelligence)[:\s>]+', '', title)
-    
-    # Remove common blog prefixes
-    title = re.sub(r'^(Blog|Article|News):\s*', '', title)
-    
-    # Clean up whitespace
-    title = ' '.join(title.split())
-    
-    # Truncate if still too long
-    if len(title) > 100:
-        title = title[:97] + "..."
-        
-    return title.strip()
-
-def extract_title_from_content(content: str) -> Optional[str]:
-    """Extract and clean the article title from content."""
-    if not content:
-        return None
-        
-    # Try to get first non-empty line
-    lines = [line.strip() for line in content.split('\n') if line.strip()]
-    if not lines:
-        return None
-        
-    # Get the first line and clean it
-    raw_title = lines[0]
-    return clean_article_title(raw_title)
 
 if __name__ == "__main__":
     bot.run(config.DISCORD_TOKEN)
