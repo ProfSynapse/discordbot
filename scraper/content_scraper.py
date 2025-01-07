@@ -10,6 +10,7 @@ async def scrape_article_content(url: str) -> Optional[str]:
     Scrapes article content using Pyppeteer.
     Returns the main article text content.
     """
+    browser = None
     try:
         browser = await launch(headless=True)
         page = await browser.newPage()
@@ -55,11 +56,27 @@ async def scrape_article_content(url: str) -> Optional[str]:
             }
         ''')
         
-        await browser.close()
-        
         if content:
             # Clean up the content
             content = re.sub(r'\s+', ' ', content).strip()  # Remove extra whitespace
+            content = re.sub(r'Share\s*this[\s\S]*$', '', content)  # Remove sharing section
+            return content
+            
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error scraping article content: {e}")
+        if browser:
+            await browser.close()
+        return None
+            content = re.sub(r'\s+', ' ', content).strip()  # Remove extra whitespace
+    finally:
+        if browser:
+            try:
+                await browser.close()
+            except:
+                pass
+
             content = re.sub(r'Share\s*this[\s\S]*$', '', content)  # Remove sharing section
             return content
             

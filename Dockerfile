@@ -1,26 +1,40 @@
 FROM python:3.11-slim
 
-# Install system dependencies for Chromium
+# Install Chrome dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
-    chromium \
-    chromium-driver \
-    libgconf-2-4 \
-    libnss3 \
-    libxss1 \
+    ca-certificates \
+    fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libatspi2.0-0 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
     libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    xdg-utils \
+    libxshmfence1 \
+    --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Set environment variable for pyppeteer to use system Chromium
-ENV PUPPETEER_SKIP_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+# Install Chrome
+RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+    && dpkg -i google-chrome-stable_current_amd64.deb || apt-get -f install -y \
+    && rm google-chrome-stable_current_amd64.deb
 
+# Set working directory
 WORKDIR /app
 
-# Copy requirements first for better caching
+# Copy requirements and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
