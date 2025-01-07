@@ -13,7 +13,7 @@ from discord.ext import commands
 from discord import app_commands  # Add this import
 import textwrap
 import logging
-from typing import List, Callable, Any  # Add List import
+from typing import List, Callable
 from api_client import api_client, APIResponseError
 from config import config
 from scraper.content_scheduler import ContentScheduler  # Updated import

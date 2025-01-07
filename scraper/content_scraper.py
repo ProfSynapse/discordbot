@@ -25,7 +25,17 @@ async def scrape_article_content(url: str) -> Optional[str]:
             '--disable-extensions',
             '--single-process',  # Important for Docker
             '--no-zygote',       # Important for Docker
-            '--disable-setuid-sandbox'
+            '--disable-setuid-sandbox',
+            '--no-first-run',
+            '--disable-notifications',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-sync',
+            '--disable-translate',
+            '--hide-scrollbars',
+            '--metrics-recording-only',
+            '--mute-audio',
+            '--disable-dbus',  # Disable DBus usage
         ]
 
         # Launch with more specific options
@@ -36,8 +46,13 @@ async def scrape_article_content(url: str) -> Optional[str]:
             handleSIGINT=False,
             handleSIGTERM=False,
             handleSIGHUP=False,
-            env={'DISPLAY': ':99'},  # Set display for Docker
-            dumpio=True  # Log browser console output
+            env={
+                'DISPLAY': ':99',
+                'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/var/run/dbus/system_bus_socket'
+            },  # Set display for Docker
+            dumpio=True,  # Log browser console output
+            ignoreHTTPSErrors=True,  # Add this to ignore HTTPS errors
+            timeout=60000  # Increase timeout to 60 seconds
         )
 
         # Set up a new page with longer timeout

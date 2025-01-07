@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Install Chrome dependencies and Xvfb
+# Install Chrome dependencies, Xvfb, and DBus
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -24,8 +24,14 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     libxshmfence1 \
     xvfb \
+    dbus \
+    dbus-x11 \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
+
+# Configure DBus
+RUN mkdir -p /var/run/dbus && \
+    dbus-uuidgen > /var/lib/dbus/machine-id
 
 # Install Chrome
 RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
@@ -37,9 +43,14 @@ RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd6
 # Set working directory first
 WORKDIR /app
 
-# Create start script in a more reliable way
-RUN printf '#!/bin/bash\nXvfb :99 -screen 0 1024x768x16 &\nsleep 1\nexport DISPLAY=:99\nexec python main.py\n' > start.sh \
-    && chmod +x start.sh
+# Create start script with DBus
+RUN printf '#!/bin/bash\n\
+mkdir -p /var/run/dbus\n\
+dbus-daemon --system --fork\n\
+Xvfb :99 -screen 0 1024x768x16 &\n\
+sleep 2\n\
+export DISPLAY=:99\n\
+exec python main.py\n' > start.sh && chmod +x start.sh
 
 # Copy requirements and install dependencies
 COPY requirements.txt .
