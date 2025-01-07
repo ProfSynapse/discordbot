@@ -202,25 +202,25 @@ class GPTTrainerAPI:
 
     async def upload_data_source(self, url: str) -> Dict[str, Any]:
         """
-        Upload a new data source URL to the chatbot.
-        
-        Returns:
-            Dict with success status and response data or error message
+        Upload a URL to the chatbot's knowledge base.
+        Just sends the URL to GPT Trainer's database.
         """
         endpoint = f'chatbot/{config.CHATBOT_UUID}/data-source/url'
         try:
-            response = await self._make_request('POST', endpoint, json={'url': url})
+            logging.info(f"Uploading URL to GPT Trainer database: {url}")
+            response = await self._make_request('POST', endpoint, json={
+                'url': url,
+            })
+            logging.info(f"Upload response from GPT Trainer: {response}")
             return {
                 'success': True,
-                'data': response,
-                'message': f"Successfully added {url} to knowledge base"
+                'data': response
             }
         except Exception as e:
-            logging.error(f"Failed to upload data source: {e}")
+            logging.error(f"Failed to upload URL: {e}", exc_info=True)
             return {
                 'success': False,
-                'error': str(e),
-                'message': f"Failed to add {url} to knowledge base"
+                'error': str(e)
             }
 
     async def summarize_content(self, url: str, content: str) -> str:

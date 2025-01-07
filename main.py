@@ -323,7 +323,7 @@ async def on_reaction_add(reaction, user):
 def extract_urls(message_content: str) -> List[str]:
     """Extract all URLs from a message."""
     words = message_content.split()
-    return [word for word in words if word.startswith(("http://", "https://"))]
+    return [word for word in words that starts with ("http://", "https://")]
 
 # Update process_data_source to take explicit URL parameter
 @with_error_handling
@@ -333,19 +333,12 @@ async def process_data_source(message, url: str):
         await message.channel.send(f"📚 I've already processed {url}")
         return
         
-    # Send initial processing message
-    processing_msg = await message.channel.send("🔍 Processing article content...")
+    processing_msg = await message.channel.send("📤 Uploading to knowledge base...")
     
     try:
-        # Scrape article content
-        content = await scrape_article_content(url)
-        if not content:
-            await processing_msg.edit(content="❌ Sorry, I couldn't read that article.")
-            return
-            
-        # Upload to GPT Trainer
+        # Step 1: Upload URL to GPT Trainer
         async with api_client as client:
-            # Upload content
+            logger.info(f"Uploading URL to GPT Trainer: {url}")
             upload_result = await client.upload_data_source(url)
             
             if not upload_result['success']:
@@ -353,25 +346,34 @@ async def process_data_source(message, url: str):
                 await processing_msg.edit(content="❌ Failed to add to my knowledge base.")
                 return
                 
-            logger.info(f"Successfully added URL to knowledge base: {url}")
+            await processing_msg.edit(content="✅ Added to knowledge base! Now generating summary...")
+            logger.info(f"Successfully uploaded URL: {url}")
             
-            # Get summary
-            summary = await client.summarize_content(url, content['content'])
+            # Step 2: Try to get a summary
+            try:
+                # Scrape content first
+                content = await scrape_article_content(url)
+                if content:
+                    summary = await client.summarize_content(url, content['content'])
+                    embed = discord.Embed(
+                        title=content.get('title', 'Article Summary'),
+                        url=url,
+                        color=discord.Color.green()
+                    )
+                    embed.add_field(name="Summary", value=summary, inline=False)
+                    embed.set_footer(text="✅ Added to my knowledge base!")
+                    await processing_msg.edit(content=None, embed=embed)
+                else:
+                    await processing_msg.edit(content="✅ Added to knowledge base! (Couldn't generate summary)")
+            except Exception as e:
+                logger.error(f"Summary generation failed: {e}")
+                await processing_msg.edit(content="✅ Added to knowledge base! (Summary generation failed)")
             
-            # Format and send response
-            embed = discord.Embed(
-                title=content['title'],
-                url=url,
-                color=discord.Color.green()  # Change to green for success
-            )
-            embed.add_field(name="Summary", value=summary, inline=False)
-            embed.set_footer(text="✅ Successfully added to my knowledge base!")
-            
-            await processing_msg.edit(content=None, embed=embed)
             PROCESSED_URLS.add(url)
+            logger.info(f"Completed processing for: {url}")
             
     except Exception as e:
-        logger.error(f"Error processing article: {e}")
+        logger.error(f"Error in process_data_source: {e}")
         await processing_msg.edit(content=f"❌ Error: {str(e)}")
 
 if __name__ == "__main__":
