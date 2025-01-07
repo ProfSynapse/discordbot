@@ -135,40 +135,43 @@ class DiscordBot(commands.Bot):
 
     @staticmethod
     def format_response(text: str) -> str:
-        """
-        Format the response text to ensure proper line breaks and spacing.
-        """
-        # First, fix the spacing between words
-        text = ' '.join(text.split())
+        """Format the response text to ensure proper line breaks and spacing."""
+        # Log the raw response first
+        logger.debug(f"Raw response before formatting:\n{text}")
         
-        # Remove duplicate bullet points and standardize
-        text = re.sub(r'•\s*•\s*', '• ', text)
-        text = re.sub(r'[•\-\*]\s*', '• ', text)
-        
-        # Fix headers formatting
-        text = re.sub(r'\*\*(.*?):\*\*', r'\n\n**\1:**\n', text)
-        
-        # Add proper spacing after bullet points and ensure they're on new lines
-        text = re.sub(r'([^\n])\s*•\s*', r'\1\n\n• ', text)
-        text = re.sub(r'^\s*•\s*', '• ', text, flags=re.MULTILINE)
-        
-        # Clean up any markdown formatting issues
-        text = re.sub(r'\s+([.,!?])', r'\1', text)
-        
-        # Fix extra spacing around bullet points
-        text = re.sub(r'\n{3,}•', '\n\n• ', text)
-        
-        # Remove triple or more newlines
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        
-        # Ensure proper spacing around sections
-        text = re.sub(r'(\n\*\*.*?\*\*:)\n*', r'\1\n', text)
-        
-        # Clean up final whitespace
+        # First, normalize line breaks and clean up extra whitespace
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        text = re.sub(r'\n\s*\n', '\n\n', text)  # Normalize multiple newlines
         text = text.strip()
+        
+        # Remove leading/trailing spaces from each line
+        lines = [line.strip() for line in text.split('\n')]
+        text = '\n'.join(lines)
+        
+        # Ensure proper bold formatting
+        text = re.sub(r'(\*\*.*?\*\*):', r'\1:', text)  # Fix any broken bold formatting
+        
+        # Add newlines around headers
+        text = re.sub(r'([^\n])\*\*', r'\1\n\n**', text)
+        text = re.sub(r'\*\*:\s*([^\n])', r'**:\n\1', text)
+        
+        # Fix bullet points
+        text = re.sub(r'•\s*•\s*', '• ', text)  # Remove double bullets
+        text = re.sub(r'(?m)^[•\-\*]\s*', '• ', text)  # Standardize bullet points at line start
+        
+        # Add spacing after bullet points
+        text = re.sub(r'(• [^\n]+)(?:\n(?![\n•]))', r'\1\n', text)
+        
+        # Final cleanup
+        text = re.sub(r'\n{3,}', '\n\n', text)  # Remove excessive newlines
+        text = text.strip()
+        
+        # Log the formatted response
+        logger.debug(f"Formatted response:\n{text}")
         
         return text
 
+    # Add this debug logging to prof method
     async def prof(self, interaction: discord.Interaction, *, prompt: str):
         await interaction.response.defer()
         try:
@@ -192,6 +195,12 @@ class DiscordBot(commands.Bot):
             async with api_client as client:
                 session_uuid = await client.create_chat_session()
                 bot_response = await client.get_response(session_uuid, prompt, context)
+                
+                # Log the raw response
+                logger.info("Raw bot response received:")
+                logger.info("-" * 50)
+                logger.info(bot_response)
+                logger.info("-" * 50)
 
             if not bot_response or bot_response.isspace():
                 raise APIResponseError("Empty response received from API")
