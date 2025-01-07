@@ -23,9 +23,9 @@ from enum import Enum
 from scraper.content_scraper import scrape_article_content
 from functools import wraps  # Add for decorator
 
-# Configure more detailed logging
+# Update logging configuration to include DEBUG level
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Change from INFO to DEBUG
     format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
@@ -139,31 +139,24 @@ class DiscordBot(commands.Bot):
         # Log the raw response first
         logger.debug(f"Raw response before formatting:\n{text}")
         
-        # First, normalize line breaks and clean up extra whitespace
+        # First, normalize newlines and clean up initial whitespace
         text = text.replace('\r\n', '\n').replace('\r', '\n')
-        text = re.sub(r'\n\s*\n', '\n\n', text)  # Normalize multiple newlines
-        text = text.strip()
+        text = ' '.join(text.split())  # Normalize spaces
         
-        # Remove leading/trailing spaces from each line
-        lines = [line.strip() for line in text.split('\n')]
-        text = '\n'.join(lines)
-        
-        # Ensure proper bold formatting
-        text = re.sub(r'(\*\*.*?\*\*):', r'\1:', text)  # Fix any broken bold formatting
-        
-        # Add newlines around headers
-        text = re.sub(r'([^\n])\*\*', r'\1\n\n**', text)
-        text = re.sub(r'\*\*:\s*([^\n])', r'**:\n\1', text)
-        
-        # Fix bullet points
+        # Fix bullet points first
         text = re.sub(r'•\s*•\s*', '• ', text)  # Remove double bullets
-        text = re.sub(r'(?m)^[•\-\*]\s*', '• ', text)  # Standardize bullet points at line start
+        text = re.sub(r'[•\-\*]+\s*', '• ', text)  # Standardize all bullet points
         
-        # Add spacing after bullet points
-        text = re.sub(r'(• [^\n]+)(?:\n(?![\n•]))', r'\1\n', text)
+        # Add proper line breaks around headers and sections
+        text = re.sub(r'\*\*(.*?):\*\*', r'\n\n**\1:**\n', text)
         
-        # Final cleanup
-        text = re.sub(r'\n{3,}', '\n\n', text)  # Remove excessive newlines
+        # Ensure bullet points are on new lines
+        text = re.sub(r'([^•])\s*•\s*', r'\1\n\n• ', text)  # Add newlines before bullets
+        text = re.sub(r'(• .*?)(?=\s*•|\s*\*\*|$)', r'\1\n', text)  # Add newlines after bullets
+        
+        # Clean up extra whitespace
+        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)  # Remove triple newlines
+        text = re.sub(r'^\s+', '', text, flags=re.MULTILINE)  # Remove leading spaces
         text = text.strip()
         
         # Log the formatted response
@@ -171,7 +164,6 @@ class DiscordBot(commands.Bot):
         
         return text
 
-    # Add this debug logging to prof method
     async def prof(self, interaction: discord.Interaction, *, prompt: str):
         await interaction.response.defer()
         try:
@@ -196,11 +188,11 @@ class DiscordBot(commands.Bot):
                 session_uuid = await client.create_chat_session()
                 bot_response = await client.get_response(session_uuid, prompt, context)
                 
-                # Log the raw response
-                logger.info("Raw bot response received:")
-                logger.info("-" * 50)
-                logger.info(bot_response)
-                logger.info("-" * 50)
+                # Add detailed logging of the raw response
+                logger.debug("=" * 50)
+                logger.debug("Raw bot response received:")
+                logger.debug(bot_response)
+                logger.debug("=" * 50)
 
             if not bot_response or bot_response.isspace():
                 raise APIResponseError("Empty response received from API")
@@ -436,26 +428,28 @@ async def process_data_source(message, url: str):
             logger.info("Generating response...")
             session_uuid = await client.create_chat_session()
             
-            prompt = f"""Analyze this article and provide a well-structured response in this exact format:
+            prompt = f"""Analyze this article and provide a well-structured response using exact formatting:
 
-            **Main Points:**
-            • [First main point]
-            • [Second main point]
-            • [Third main point]
+**Main Points:**
+• First main point
+• Second main point
+• Third main point
 
-            **Why This Matters:**
-            • [First reason]
-            • [Second reason]
-            • [Third reason]
+**Why This Matters:**
+• First reason
+• Second reason
+• Third reason
 
-            **Key Implications:**
-            • [First implication]
-            • [Second implication]
-            • [Third implication]
+**Key Implications:**
+• First implication
+• Second implication
+• Third implication
 
-            Here's the article content:
-            {article_content[:4000]}  # Changed from content to article_content
-            """
+Important: Use single bullet points (•) and ensure each point starts on a new line.
+
+Here's the article content:
+{article_content[:4000]}
+"""
             
             response = await client.get_response(session_uuid, prompt)
             
