@@ -152,17 +152,34 @@ class DiscordBot(commands.Bot):
         # Add line breaks after each bullet point
         text = re.sub(r'([^\n])(\s*•\s*)', r'\1\n\n• ', text)
         
-        # Ensure proper spacing around headers (text between **)
-        text = re.sub(r'\*\*(.*?)\*\*', r'\n\n**\1**\n', text)
+        text = re.sub(r'[•\-\*]\s*', '• ', text)
+        
+        # Ensure proper spacing after bullet points
+        text = re.sub(r'•\s*([^\n])', r'• \1', text)
+        
+        # Fix spacing around headers
+        text = re.sub(r'\*\*(.*?):\*\*', r'\n\n**\1:**\n', text)
+        
+        # Add line breaks after each bullet point
+        text = re.sub(r'([^\n])(\s*•\s*)', r'\1\n\n• ', text)
         
         # Remove extra blank lines
         text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
         
+        # Remove unwanted spaces
+        text = re.sub(r'\s+([.,!?])', r'\1', text)  # Remove spaces before punctuation
+        text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)  # Fix split numbers
+        text = re.sub(r'([a-zA-Z])\s+([a-zA-Z])', r'\1\2', text)  # Fix split words
+        
         # Ensure proper spacing around lists
-        text = re.sub(r'\n\n\s*•', '\n• ', text)
+        text = re.sub(r'\n{3,}•', '\n\n•', text)
         
         # Clean up any remaining spacing issues
         text = text.strip()
+        
+        # Add final formatting touches
+        text = re.sub(r'^\s*•', '• ', text, flags=re.MULTILINE)  # Ensure space after bullet points
+        text = re.sub(r'\n{3,}', '\n\n', text)  # Final cleanup of multiple newlines
         
         return text
 
@@ -448,9 +465,11 @@ async def process_data_source(message, url: str):
             response = await client.get_response(session_uuid, prompt)
             
             if response:
-                # Format the title link
-                article_title = extract_title_from_content(article_content) or "Article Analysis"  # Changed from content to article_content
-                # Use the bot's static method for formatting
+                # Get and clean the title
+                article_title = extract_title_from_content(article_content) or "Article Analysis"
+                article_title = clean_article_title(article_title)
+                
+                # Format the message with clean title
                 formatted_response = bot.format_response(response)
                 formatted_message = f"**[{article_title}]({url})**\n\n{formatted_response}"
                 
@@ -469,18 +488,48 @@ async def process_data_source(message, url: str):
         logger.error(f"Error in process_data_source: {e}", exc_info=True)
         await processing_msg.edit(content=f"❌ Error: {str(e)}")
 
+def clean_article_title(title: str) -> str:
+    """
+    Clean up article titles by removing common prefixes, brackets, etc.
+    
+    Args:
+        title (str): The raw title to clean
+        
+    Returns:
+        str: Cleaned title
+    """
+    # Remove arXiv patterns
+    title = re.sub(r'arXiv:\s*\d+\.\d+v\d+\s*', '', title)
+    title = re.sub(r'\[.*?\]\s*', '', title)  # Remove any bracketed text
+    
+    # Remove category prefixes
+    title = re.sub(r'^(CS|AI|ML|Computer Science|Artificial Intelligence)[:\s>]+', '', title)
+    
+    # Remove common blog prefixes
+    title = re.sub(r'^(Blog|Article|News):\s*', '', title)
+    
+    # Clean up whitespace
+    title = ' '.join(title.split())
+    
+    # Truncate if still too long
+    if len(title) > 100:
+        title = title[:97] + "..."
+        
+    return title.strip()
+
 def extract_title_from_content(content: str) -> Optional[str]:
-    """Extract a reasonable title from the content."""
-    # Try to get first line
-    lines = content.split('\n')
-    if lines:
-        # Clean up the first line
-        title = lines[0].strip()
-        # Limit length
-        if len(title) > 100:
-            title = title[:97] + "..."
-        return title
-    return None
+    """Extract and clean the article title from content."""
+    if not content:
+        return None
+        
+    # Try to get first non-empty line
+    lines = [line.strip() for line in content.split('\n') if line.strip()]
+    if not lines:
+        return None
+        
+    # Get the first line and clean it
+    raw_title = lines[0]
+    return clean_article_title(raw_title)
 
 if __name__ == "__main__":
     bot.run(config.DISCORD_TOKEN)
