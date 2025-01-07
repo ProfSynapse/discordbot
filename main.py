@@ -299,25 +299,46 @@ async def on_message(message):
 # Replace on_reaction_add event handler
 @bot.event
 async def on_reaction_add(reaction, user):
+    """Handle reaction events for article processing."""
     if user == bot.user:
         return
 
-    if reaction.emoji == "📥":  # Fix the emoji comparison
-        # Try to get URL from embed first, then message content
+    if reaction.emoji == "📥":
         urls = []
-        if reaction.message.embeds:
-            embed = reaction.message.embeds[0]
-            if embed.url:  # Get URL from embed if it exists
+        message = reaction.message
+        
+        # Check embeds first
+        if message.embeds:
+            embed = message.embeds[0]
+            if embed.url:
                 urls.append(embed.url)
-        else:
-            urls = extract_urls(reaction.message.content)
-            
+                
+        # Then check message content
+        content_urls = extract_urls(message.content)
+        urls.extend(content_urls)
+        
         if urls:
             for url in urls:
                 if url not in PROCESSED_URLS:
-                    await process_data_source(reaction.message, url)
-                    logger.info(f"Processing URL from reaction: {url}")
-                    PROCESSED_URLS.add(url)
+                    try:
+                        # Remove the reaction to show we're processing
+                        await reaction.remove(user)
+                        # Add a "loading" reaction
+                        await message.add_reaction("⏳")
+                        
+                        # Process the URL
+                        await process_data_source(message, url)
+                        
+                        # Remove loading reaction
+                        await message.remove_reaction("⏳", bot.user)
+                        # Add success reaction
+                        await message.add_reaction("✅")
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing URL {url}: {e}")
+                        await message.remove_reaction("⏳", bot.user)
+                        await message.add_reaction("❌")
+                        continue
 
 # Update extract_url function to extract_urls (plural)
 def extract_urls(message_content: str) -> List[str]:
@@ -333,7 +354,7 @@ async def process_data_source(message, url: str):
         await message.channel.send(f"📚 I've already processed {url}")
         return
         
-    processing_msg = await message.channel.send("📤 Processing article...")
+    processing_msg = await message.channel.send(f"📤 Processing article from {url}...")
     
     try:
         # Step 1: Upload URL to GPT Trainer
@@ -341,9 +362,10 @@ async def process_data_source(message, url: str):
             logger.info(f"Uploading URL to GPT Trainer: {url}")
             upload_result = await client.upload_data_source(url)
             
-            if not upload_result['success']:
-                logger.error(f"Failed to upload to knowledge base: {upload_result['error']}")
-                await processing_msg.edit(content="❌ Failed to add to my knowledge base.")
+            if not upload_result.get('success'):
+                error_msg = upload_result.get('error', 'Unknown error')
+                logger.error(f"Failed to upload to knowledge base: {error_msg}")
+                await processing_msg.edit(content=f"❌ Failed to add to my knowledge base: {error_msg}")
                 return
             
             # Step 2: Scrape article content
@@ -351,6 +373,7 @@ async def process_data_source(message, url: str):
             content = await scrape_article_content(url)
             
             if not content:
+                logger.warning(f"Could not scrape content from {url}")
                 await processing_msg.edit(content="✅ Added to knowledge base! (Could not generate summary)")
                 PROCESSED_URLS.add(url)
                 return
@@ -374,7 +397,7 @@ async def process_data_source(message, url: str):
             PROCESSED_URLS.add(url)
 
     except Exception as e:
-        logger.error(f"Error in process_data_source: {e}")
+        logger.error(f"Error in process_data_source: {e}", exc_info=True)
         await processing_msg.edit(content=f"❌ Error: {str(e)}")
 
 if __name__ == "__main__":
