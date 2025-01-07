@@ -13,7 +13,7 @@ from discord.ext import commands
 from discord import app_commands  # Add this import
 import textwrap
 import logging
-from typing import List, Callable
+from typing import List, Callable, Optional  # Add Optional to imports
 from api_client import api_client, APIResponseError
 from config import config
 from scraper.content_scheduler import ContentScheduler  # Updated import
@@ -376,9 +376,9 @@ async def process_data_source(message, url: str):
             
             # Step 2: Scrape article content
             logger.info("Scraping article content...")
-            content = await scrape_article_content(url)
+            article_content = await scrape_article_content(url)  # Changed variable name from content to article_content
             
-            if not content:
+            if not article_content:
                 logger.warning(f"Could not scrape content from {url}")
                 await processing_msg.edit(content="❌ Could not read the article content")
                 return
@@ -387,39 +387,63 @@ async def process_data_source(message, url: str):
             logger.info("Generating response...")
             session_uuid = await client.create_chat_session()
             
-            prompt = f"""I've read this article: {url}
-            
-            Here's the content:
-            {content[:4000]}  # Trim to avoid token limits
-            
-            Please provide a comprehensive analysis covering:
-            1. Main points and key takeaways
-            2. Why this is significant
-            3. Your perspective on the implications
-            
-            Format it in a clear, easy-to-read way."""
+            prompt = f"""Analyze this article and provide a well-structured response in this exact format:
+
+            **Main Points:**
+            • [First main point]
+            • [Second main point]
+            • [Third main point]
+
+            **Why This Matters:**
+            • [First reason]
+            • [Second reason]
+            • [Third reason]
+
+            **Key Implications:**
+            • [First implication]
+            • [Second implication]
+            • [Third implication]
+
+            Here's the article content:
+            {article_content[:4000]}  # Changed from content to article_content
+            """
             
             response = await client.get_response(session_uuid, prompt)
             
             if response:
+                # Format the title link
+                article_title = extract_title_from_content(article_content) or "Article Analysis"  # Changed from content to article_content
+                formatted_response = f"**[{article_title}]({url})**\n\n{response}"
+                
+                # Create embed with formatted response
                 embed = discord.Embed(
-                    title="Article Analysis",
-                    description=response,
-                    color=discord.Color.blue(),
-                    url=url
+                    description=formatted_response,
+                    color=discord.Color.blue()
                 )
-                embed.set_footer(text="React with 💭 to discuss this further")
+                embed.set_footer(text="💭 React to discuss further")
                 await processing_msg.edit(content="✅ Here's my analysis:", embed=embed)
-                await message.add_reaction("💭")  # Add reaction for follow-up discussion
+                await message.add_reaction("💭")
             else:
                 await processing_msg.edit(content="❌ Failed to analyze the article")
             
-            # Mark as processed
             PROCESSED_URLS.add(url)
 
     except Exception as e:
         logger.error(f"Error in process_data_source: {e}", exc_info=True)
         await processing_msg.edit(content=f"❌ Error: {str(e)}")
+
+def extract_title_from_content(content: str) -> Optional[str]:
+    """Extract a reasonable title from the content."""
+    # Try to get first line
+    lines = content.split('\n')
+    if lines:
+        # Clean up the first line
+        title = lines[0].strip()
+        # Limit length
+        if len(title) > 100:
+            title = title[:97] + "..."
+        return title
+    return None
 
 if __name__ == "__main__":
     bot.run(config.DISCORD_TOKEN)

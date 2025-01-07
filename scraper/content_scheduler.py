@@ -301,10 +301,10 @@ class ContentScheduler:
                         if self.news_channel and self.news_queue:
                             article = self.news_queue.pop(0)
                             try:
-                                embed = self._create_news_embed(article)
-                                message = await self.news_channel.send(embed=embed)
-                                await message.add_reaction("📥")  # Add “inbox tray” reaction
-                                logger.info(f"Posted article: {article['title']}")
+                                # Simplified message - just post the URL
+                                message = await self.news_channel.send(f"🔍 New article: {article['url']}")
+                                await message.add_reaction("📥")
+                                logger.info(f"Posted article link: {article['url']}")
                             except Exception as e:
                                 logger.error(f"Failed to post article: {e}")
                                 self.news_queue.insert(0, article)
