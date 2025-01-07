@@ -8,6 +8,7 @@ Features:
 - Rate limiting and error handling
 """
 
+import re
 import discord
 from discord.ext import commands
 from discord import app_commands  # Add this import
@@ -132,6 +133,39 @@ class DiscordBot(commands.Bot):
         else:
             await message.channel.send("No valid URL found in the message.")
 
+    @staticmethod
+    def format_response(text: str) -> str:
+        """
+        Format the response text to ensure proper line breaks and spacing.
+        
+        Args:
+            text (str): The text to format
+        Returns:
+            str: Properly formatted text
+        """
+        # Replace any variant of bullet points with standardized format
+        text = re.sub(r'[•\-\*]\s*', '• ', text)
+        
+        # Ensure proper spacing after bullet points
+        text = re.sub(r'•\s*([^\n])', r'• \1', text)
+        
+        # Add line breaks after each bullet point
+        text = re.sub(r'([^\n])(\s*•\s*)', r'\1\n\n• ', text)
+        
+        # Ensure proper spacing around headers (text between **)
+        text = re.sub(r'\*\*(.*?)\*\*', r'\n\n**\1**\n', text)
+        
+        # Remove extra blank lines
+        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+        
+        # Ensure proper spacing around lists
+        text = re.sub(r'\n\n\s*•', '\n• ', text)
+        
+        # Clean up any remaining spacing issues
+        text = text.strip()
+        
+        return text
+
     async def prof(self, interaction: discord.Interaction, *, prompt: str):
         await interaction.response.defer()
         try:
@@ -159,8 +193,11 @@ class DiscordBot(commands.Bot):
             if not bot_response or bot_response.isspace():
                 raise APIResponseError("Empty response received from API")
 
+            # Use the class's static method only
+            formatted_response = self.format_response(bot_response)
+            
             # Send response in chunks
-            message_chunks = chunk_message_by_paragraphs(bot_response)
+            message_chunks = chunk_message_by_paragraphs(formatted_response)
 
             for chunk in message_chunks:
                 await interaction.followup.send(chunk)
@@ -413,16 +450,16 @@ async def process_data_source(message, url: str):
             if response:
                 # Format the title link
                 article_title = extract_title_from_content(article_content) or "Article Analysis"  # Changed from content to article_content
-                formatted_response = f"**[{article_title}]({url})**\n\n{response}"
+                # Use the bot's static method for formatting
+                formatted_response = bot.format_response(response)
+                formatted_message = f"**[{article_title}]({url})**\n\n{formatted_response}"
                 
                 # Create embed with formatted response
                 embed = discord.Embed(
-                    description=formatted_response,
+                    description=formatted_message,
                     color=discord.Color.blue()
                 )
-                embed.set_footer(text="💭 React to discuss further")
                 await processing_msg.edit(content="✅ Here's my analysis:", embed=embed)
-                await message.add_reaction("💭")
             else:
                 await processing_msg.edit(content="❌ Failed to analyze the article")
             
