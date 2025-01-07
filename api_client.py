@@ -200,15 +200,28 @@ class GPTTrainerAPI:
                 logging.error(f"Retry failed: {retry_error}")
                 return "I'm having trouble processing your request. Please try again in a moment."
 
-    async def upload_data_source(self, url: str) -> bool:
-        """Upload a new data source URL to the chatbot."""
+    async def upload_data_source(self, url: str) -> Dict[str, Any]:
+        """
+        Upload a new data source URL to the chatbot.
+        
+        Returns:
+            Dict with success status and response data or error message
+        """
         endpoint = f'chatbot/{config.CHATBOT_UUID}/data-source/url'
         try:
-            await self._make_request('POST', endpoint, json={'url': url})
-            return True
+            response = await self._make_request('POST', endpoint, json={'url': url})
+            return {
+                'success': True,
+                'data': response,
+                'message': f"Successfully added {url} to knowledge base"
+            }
         except Exception as e:
             logging.error(f"Failed to upload data source: {e}")
-            return False
+            return {
+                'success': False,
+                'error': str(e),
+                'message': f"Failed to add {url} to knowledge base"
+            }
 
     async def summarize_content(self, url: str, content: str) -> str:
         """Get a structured summary of the article content."""

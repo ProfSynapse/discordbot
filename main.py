@@ -322,6 +322,7 @@ def extract_urls(message_content: str) -> List[str]:
 async def process_data_source(message, url: str):
     """Process a message containing a URL."""
     if url in PROCESSED_URLS:
+        await message.channel.send(f"📚 I've already processed {url}")
         return
         
     # Send initial processing message
@@ -337,7 +338,14 @@ async def process_data_source(message, url: str):
         # Upload to GPT Trainer
         async with api_client as client:
             # Upload content
-            await client.upload_data_source(url)
+            upload_result = await client.upload_data_source(url)
+            
+            if not upload_result['success']:
+                logger.error(f"Failed to upload to knowledge base: {upload_result['error']}")
+                await processing_msg.edit(content="❌ Failed to add to my knowledge base.")
+                return
+                
+            logger.info(f"Successfully added URL to knowledge base: {url}")
             
             # Get summary
             summary = await client.summarize_content(url, content['content'])
@@ -346,17 +354,17 @@ async def process_data_source(message, url: str):
             embed = discord.Embed(
                 title=content['title'],
                 url=url,
-                color=discord.Color.blue()
+                color=discord.Color.green()  # Change to green for success
             )
             embed.add_field(name="Summary", value=summary, inline=False)
-            embed.set_footer(text="Article added to my knowledge base! �")
+            embed.set_footer(text="✅ Successfully added to my knowledge base!")
             
             await processing_msg.edit(content=None, embed=embed)
             PROCESSED_URLS.add(url)
             
     except Exception as e:
         logger.error(f"Error processing article: {e}")
-        await processing_msg.edit(content="❌ An error occurred while processing the article.")
+        await processing_msg.edit(content=f"❌ Error: {str(e)}")
 
 if __name__ == "__main__":
     bot.run(config.DISCORD_TOKEN)
