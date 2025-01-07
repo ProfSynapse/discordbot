@@ -276,7 +276,6 @@ class ContentScheduler:
         while self.running:
             try:
                 if self.news_queue:
-                    # Calculate time until next fetch (roughly 12 hours)
                     now = datetime.now()
                     next_fetch = now.replace(
                         hour=18 if now.hour < 18 else 6,
@@ -289,7 +288,6 @@ class ContentScheduler:
                     items_to_post = len(self.news_queue)
                     
                     if items_to_post > 0:
-                        # Calculate average delay between posts
                         base_delay = time_window / items_to_post
                         delay = random.uniform(base_delay * 0.7, base_delay * 1.3)
                         logger.info(f"News: Waiting {delay/60:.1f} minutes until next post")
