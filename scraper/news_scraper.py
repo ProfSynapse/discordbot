@@ -128,7 +128,7 @@ def is_substack_feed(source: str, url: str) -> bool:
 # Fix the keyword error in fetch_feed function
 async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict) -> List[Dict]:
     try:
-        logger.info(f"Fetching {name} RSS feed from {feed_info['url']}")  # Added URL to log
+        logger.info(f"Fetching {name} RSS feed")
         async with session.get(feed_info["url"]) as response:
             if response.status != 200:
                 logger.error(f"Failed to fetch {name} feed: HTTP {response.status}")
@@ -137,40 +137,29 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
             content = await response.text()
             feed = feedparser.parse(content)
             
-            if not feed.entries:
-                logger.warning(f"No entries found in feed for {name} at {feed_info['url']}")
-                return []
-            
             articles = []
             is_substack = is_substack_feed(name, feed_info["url"])
             one_day_ago = datetime.now(pytz.UTC) - timedelta(days=1)
             
-            logger.debug(f"Processing {len(feed.entries)} entries from {name}")
-            
             for entry in feed.entries[:20]:  # Check last 20 entries
                 try:
-                    # Get the date first - add debug logging
+                    # Get the date first
                     raw_date = entry.get('published', entry.get('updated', ''))
-                    logger.debug(f"{name} raw date: {raw_date}")
-                    
                     date = parse_date(raw_date, feed_info["date_format"])
-                    logger.debug(f"{name} parsed date: {date}")
 
                     # Always apply date filtering
                     if date < one_day_ago:
-                        logger.debug(f"Skipping old article from {name}: {entry.title}")
                         continue
 
                     # For Substacks, skip keyword filtering but keep date filtering
                     if is_substack:
-                        logger.debug(f"Found recent Substack article: {entry.title} from {name}")
                         articles.append({
                             "title": entry.title,
                             "url": entry.link,
                             "summary": entry.get('summary', ''),
                             "source": name,
                             "published": date.isoformat(),
-                            "image_url": None  # Simplified for debugging
+                            "image_url": None
                         })
                         continue
 
@@ -178,16 +167,24 @@ async def fetch_feed(session: aiohttp.ClientSession, name: str, feed_info: Dict)
                     if any(kw in entry.title.lower() or 
                           kw in entry.get('summary', '').lower() 
                           for kw in AI_KEYWORDS):
-                        # Process non-Substack article
-                        # ...existing article processing code...
-                        pass
+                        # Process article content
+                        summary = entry.get('summary', '')
+                        if not summary and 'description' in entry:
+                            summary = entry['description']
+                        
+                        articles.append({
+                            "title": entry.title,
+                            "url": entry.link,
+                            "summary": summary,
+                            "source": name,
+                            "published": date.isoformat(),
+                            "image_url": None
+                        })
+                        logger.info(f"Found AI-related article from {name}: {entry.title}")
 
                 except Exception as e:
                     logger.error(f"Error processing entry from {name}: {e}")
                     continue
-            
-            if is_substack:
-                logger.info(f"Found {len(articles)} articles from Substack {name} in last 24h")
             
             return articles
             

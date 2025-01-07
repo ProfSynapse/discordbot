@@ -10,6 +10,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from config import config  # Changed from relative import
 import html  # Add this import at the top
+from google.oauth2.credentials import Credentials
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,18 +45,27 @@ class ContentScheduler:
         self.posted_urls = set()  # Add this line to track posted URLs
 
     async def start(self) -> None:
+        """Initialize and start the content scheduler."""
         try:
             self._initialize_channels()
             self.running = True
-            await self._fetch_content()  # Fetch initial content
+            
+            # Check last 100 messages in the channel to build initial posted_urls set
+            async for message in self.news_channel.history(limit=100):
+                urls = [word for word in message.content.split() 
+                       if word.startswith(("http://", "https://"))]
+                self.posted_urls.update(urls)
+                
+            logger.info(f"Loaded {len(self.posted_urls)} previously posted URLs")
             
             # Post first news article if available
+            await self._fetch_content()
             if self.news_queue:
                 article = self.news_queue.pop(0)
                 try:
-                    # Only post the URL
                     message = await self.news_channel.send(article['url'])
                     await message.add_reaction("📥")
+                    self.posted_urls.add(article['url'])
                     logger.info(f"Posted startup article URL: {article['url']}")
                 except Exception as e:
                     logger.error(f"Failed to post startup article: {e}")
@@ -81,6 +91,7 @@ class ContentScheduler:
             
             self._start_tasks()
             logger.info("Scheduler started successfully")
+            
         except Exception as e:
             logger.error(f"Error starting scheduler: {e}", exc_info=True)
             self.running = False
@@ -185,20 +196,18 @@ class ContentScheduler:
         return None
 
     def _is_recent(self, date: datetime) -> bool:
+        """Check if a date is within the last 24 hours."""
         return datetime.now(date.tzinfo) - date <= timedelta(hours=24)
 
     def _is_new_and_recent(self, article: Dict[str, Any], hours: int = 24) -> bool:
+        """Check if an article is both new (not posted) and recent."""
         try:
             published = datetime.fromisoformat(article['published'])
             recent_enough = (datetime.now(published.tzinfo) - published) <= timedelta(hours=hours)
-            not_seen = (article['url'] not in self.scraped_urls and 
-                       article['url'] not in self.posted_urls)
-            if recent_enough and not_seen:
-                self.scraped_urls.add(article['url'])
-                return True
+            not_posted = article['url'] not in self.posted_urls
+            return recent_enough and not_posted
         except:
-            pass
-        return False
+            return False
 
     def _create_news_embed(self, article: Dict[str, Any]) -> discord.Embed:
         embed = discord.Embed(
@@ -298,6 +307,12 @@ class ContentScheduler:
                         
                         if self.news_channel and self.news_queue:
                             article = self.news_queue.pop(0)
+                            
+                            # Skip if already posted
+                            if article['url'] in self.posted_urls:
+                                logger.debug(f"Skipping already posted article: {article['url']}")
+                                continue
+                                
                             try:
                                 # Simply post the URL
                                 message = await self.news_channel.send(article['url'])
@@ -306,7 +321,9 @@ class ContentScheduler:
                                 logger.info(f"Posted article: {article['url']}")
                             except Exception as e:
                                 logger.error(f"Failed to post article: {e}")
-                                self.news_queue.insert(0, article)
+                                # Only add back to queue if it wasn't a duplicate
+                                if article['url'] not in self.posted_urls:
+                                    self.news_queue.insert(0, article)
                     else:
                         await asyncio.sleep(300)
                 else:
@@ -389,6 +406,14 @@ class ContentScheduler:
                                 self._news_drip_task = asyncio.create_task(restart_func())
                             elif task == self._youtube_drip_task:
                                 self._youtube_drip_task = asyncio.create_task(restart_func())
+                                
+                await asyncio.sleep(60)  # Check every minute
+            except Exception as e:
+                logger.error(f"Error in task monitor: {e}")
+                await asyncio.sleep(60)
+
+    # ...rest of existing code...
+
                                 
                 await asyncio.sleep(60)  # Check every minute
             except Exception as e:
