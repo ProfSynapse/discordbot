@@ -374,32 +374,45 @@ async def process_data_source(message, url: str):
                 PROCESSED_URLS.add(url)
                 return
             
-            # Continue with normal processing for new URLs
-            
             # Step 2: Scrape article content
             logger.info("Scraping article content...")
             content = await scrape_article_content(url)
             
             if not content:
                 logger.warning(f"Could not scrape content from {url}")
-                await processing_msg.edit(content="✅ Added to knowledge base! (Could not generate summary)")
-                PROCESSED_URLS.add(url)
+                await processing_msg.edit(content="❌ Could not read the article content")
                 return
-                
-            # Step 3: Generate summary
-            logger.info("Generating summary...")
-            summary = await client.summarize_content(url, content)
             
-            if summary:
+            # Step 3: Generate response using chat completion
+            logger.info("Generating response...")
+            session_uuid = await client.create_chat_session()
+            
+            prompt = f"""I've read this article: {url}
+            
+            Here's the content:
+            {content[:4000]}  # Trim to avoid token limits
+            
+            Please provide a comprehensive analysis covering:
+            1. Main points and key takeaways
+            2. Why this is significant
+            3. Your perspective on the implications
+            
+            Format it in a clear, easy-to-read way."""
+            
+            response = await client.get_response(session_uuid, prompt)
+            
+            if response:
                 embed = discord.Embed(
-                    title="Article Summary",
-                    description=summary,
-                    color=discord.Color.green()
+                    title="Article Analysis",
+                    description=response,
+                    color=discord.Color.blue(),
+                    url=url
                 )
-                embed.add_field(name="Source", value=f"[Link]({url})", inline=False)
-                await processing_msg.edit(content="✅ Added to knowledge base!", embed=embed)
+                embed.set_footer(text="React with 💭 to discuss this further")
+                await processing_msg.edit(content="✅ Here's my analysis:", embed=embed)
+                await message.add_reaction("💭")  # Add reaction for follow-up discussion
             else:
-                await processing_msg.edit(content="✅ Added to knowledge base! (Summary generation failed)")
+                await processing_msg.edit(content="❌ Failed to analyze the article")
             
             # Mark as processed
             PROCESSED_URLS.add(url)

@@ -236,9 +236,10 @@ class GPTTrainerAPI:
                 'error': str(e)
             }
 
-    async def summarize_content(self, url: str, content: str) -> str:
-        """Get a structured summary of the article content."""
+    async def summarize_content(self, url: str, content: str) -> Dict[str, Any]:
+        """Get a structured summary of the article content with fallback."""
         try:
+            # First try the API endpoint
             endpoint = f'chatbot/{config.CHATBOT_UUID}/session/summary'
             data = {
                 'url': url,
@@ -251,11 +252,41 @@ class GPTTrainerAPI:
                            - [Third key point]
                            Main Takeaway: [Brief one-sentence takeaway]"""
             }
-            response = await self._make_request('POST', endpoint, json=data)
-            return response.get('summary', "Sorry, I couldn't generate a summary.")
+            try:
+                response = await self._make_request('POST', endpoint, json=data)
+                if response and 'summary' in response:
+                    return {
+                        'success': True,
+                        'summary': response['summary']
+                    }
+            except ServerError:
+                # If server error, fall through to fallback
+                pass
+
+            # Fallback: Use message stream for summary
+            session_uuid = await self.create_chat_session()
+            prompt = f"""Please summarize the following article concisely:
+
+            {content[:4000]}  # Trim content to avoid token limits
+
+            Format the summary with:
+            - Key points
+            - Main takeaway
+            Keep it brief and informative."""
+
+            summary = await self.get_response(session_uuid, prompt)
+            return {
+                'success': True,
+                'summary': summary,
+                'fallback': True
+            }
+
         except Exception as e:
             logging.error(f"Failed to generate summary: {e}")
-            return "Sorry, I couldn't generate a summary at this time."
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
 # Create a singleton instance
 api_client = GPTTrainerAPI()
