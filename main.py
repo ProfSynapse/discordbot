@@ -190,8 +190,14 @@ class DiscordBot(commands.Bot):
     async def prof(self, interaction: discord.Interaction, *, prompt: str):
         await interaction.response.defer()
         try:
-            # First, send the user's query as a message from the bot but mentioning the user
-            await interaction.followup.send(f"**{interaction.user.display_name}:**\n{prompt}")
+            # First, send the user's query as an embed
+            query_embed = discord.Embed(
+                title="🤔 Question",
+                description=prompt,
+                color=discord.Color.blurple()
+            )
+            query_embed.set_footer(text=f"Asked by {interaction.user.display_name}")
+            await interaction.followup.send(embed=query_embed)
             
             # Get last 10 messages from the channel
             channel = interaction.channel
@@ -202,7 +208,6 @@ class DiscordBot(commands.Bot):
             context = "<recent_channel_conversation>\n"
             for msg in messages:
                 author_name = msg.author.display_name
-                # Skip bot commands and empty messages
                 if not msg.content.startswith('/') and msg.content.strip():
                     context += f"{author_name}: {msg.content}\n"
             context += "</recent_channel_conversation>"
@@ -211,7 +216,6 @@ class DiscordBot(commands.Bot):
                 session_uuid = await client.create_chat_session()
                 bot_response = await client.get_response(session_uuid, prompt, context)
                 
-                # Add detailed logging of the raw response
                 logger.debug("=" * 50)
                 logger.debug("Raw bot response received:")
                 logger.debug(bot_response)
@@ -220,21 +224,37 @@ class DiscordBot(commands.Bot):
             if not bot_response or bot_response.isspace():
                 raise APIResponseError("Empty response received from API")
 
-            # Use the class's static method only
+            # Format the response
             formatted_response = self.format_response(bot_response)
             
-            # Send response in chunks
-            message_chunks = chunk_message_by_paragraphs(formatted_response)
-
-            for chunk in message_chunks:
-                await interaction.followup.send(chunk)
+            # Create response embed
+            response_embed = discord.Embed(
+                title="🧠 Professor Synapse's Response",
+                description=formatted_response,
+                color=discord.Color.green()
+            )
+            
+            # Split response into chunks if needed
+            if len(formatted_response) > 4096:  # Discord's embed description limit
+                chunks = chunk_message_by_paragraphs(formatted_response)
+                for i, chunk in enumerate(chunks, 1):
+                    chunk_embed = discord.Embed(
+                        title=f"🧠 Professor Synapse's Response (Part {i}/{len(chunks)})",
+                        description=chunk,
+                        color=discord.Color.green()
+                    )
+                    await interaction.followup.send(embed=chunk_embed)
+            else:
+                await interaction.followup.send(embed=response_embed)
 
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
-            await interaction.followup.send(
-                "An error occurred while processing your request. "
-                "I'll try to fix this and be back shortly!"
+            error_embed = discord.Embed(
+                title="❌ Error",
+                description="An error occurred while processing your request. I'll try to fix this and be back shortly!",
+                color=discord.Color.red()
             )
+            await interaction.followup.send(embed=error_embed)
 
     async def generate_image(self, interaction: discord.Interaction, prompt: str, size: ImageSize = ImageSize.SQUARE):
         """Generate an image using DALL-E 3"""
@@ -421,8 +441,31 @@ async def process_data_source(message, url: str):
     processing_msg = await message.channel.send(f"📤 Processing article from {url}...")
     
     try:
-        # Step 1: Upload URL to GPT Trainer
+        # Step 1: Scrape the article content
+        content = await scrape_article_content(url)
+        if not content:
+            await processing_msg.edit(content=f"❌ Could not extract content from {url}")
+            return
+
+        # Step 2: Generate article summary
         async with api_client as client:
+            summary_result = await client.summarize_content(url, content)
+            
+            if summary_result.get('success'):
+                summary = summary_result['summary']
+                # Format the summary as an embed
+                embed = discord.Embed(
+                    title="📝 Article Summary",
+                    description=summary,
+                    color=discord.Color.blue(),
+                    url=url
+                )
+                embed.set_footer(text="React with 📥 to add to my knowledge base")
+                await message.channel.send(embed=embed)
+            else:
+                logger.error(f"Failed to generate summary: {summary_result.get('error')}")
+                
+            # Step 3: Upload to knowledge base
             logger.info(f"Uploading URL to GPT Trainer: {url}")
             upload_result = await client.upload_data_source(url)
             
@@ -435,10 +478,9 @@ async def process_data_source(message, url: str):
             # Handle case where URL already exists
             if upload_result.get('existing'):
                 await processing_msg.edit(content="📚 This article is already in my knowledge base!")
-                PROCESSED_URLS.add(url)
-                return
-                
-            await processing_msg.edit(content=f"✅ Added to my knowledge base: {url}")
+            else:
+                await processing_msg.edit(content=f"✅ Added to my knowledge base: {url}")
+            
             PROCESSED_URLS.add(url)
 
     except Exception as e:
