@@ -135,68 +135,63 @@ class DiscordBot(commands.Bot):
 
     @staticmethod
     def format_response(text: str) -> str:
-        """Format the response text to ensure proper line breaks and spacing."""
+        """Format the response text while preserving Discord markdown."""
         print("\n=== Raw Input ===")
         print(text)
         print("=== End Raw Input ===\n")
         
-        # Try to parse as JSON first
+        # Parse JSON if present
         try:
-            # Check if the text looks like JSON
             if text.strip().startswith('{') and text.strip().endswith('}'):
                 import json
                 data = json.loads(text)
                 if isinstance(data, dict):
-                    # Extract message content from JSON if available
-                    text = data.get('text', '') or data.get('content', '') or data.get('message', '') or text
+                    text = data.get('response', '') or data.get('text', '') or data.get('content', '') or text
         except:
-            # If JSON parsing fails, use the raw text
             pass
 
-        # First, normalize all newlines and remove extra spaces
-        text = text.replace('\r\n', '\n').replace('\r', '\n')
-        text = re.sub(r'\s+', ' ', text)
-
-        # Handle Markdown headers (# Header)
-        text = re.sub(r'(?m)^#\s*([^\n]+)$', r'\n\n**\1**\n', text)
-        text = re.sub(r'(?m)^##\s*([^\n]+)$', r'\n\n**\1**\n', text)
-
-        # Handle bullet points
-        text = re.sub(r'(?m)^\s*[-•]\s*', '\n• ', text)
-
-        # Handle numbered lists
-        text = re.sub(r'(?m)^\s*(\d+\.)\s*', r'\n\1 ', text)
-
-        # Handle blockquotes
-        text = re.sub(r'(?m)^>\s*(.+)$', r'\n> *\1*\n', text)
-
-        # Handle code blocks
-        text = re.sub(r'```([\s\S]*?)```', r'\n```\1```\n', text)
-
-        # Handle inline code
-        text = re.sub(r'`([^`]+)`', r'`\1`', text)
-
-        # Handle bold and italic
-        text = re.sub(r'\*\*([^*]+)\*\*', r'**\1**', text)
-        text = re.sub(r'\*([^*]+)\*', r'*\1*', text)
-
-        # Handle section headers with proper spacing
-        text = re.sub(r'(?:^|\n)([A-Za-z][A-Za-z\s]+:)\s*', r'\n\n**\1**\n', text)
-
-        # Clean up newlines while preserving intentional breaks
+        # Initial cleanup while preserving existing markdown
+        lines = text.split('\n')
+        formatted_lines = []
+        in_list = False
+        
+        for line in lines:
+            # Preserve empty lines for spacing
+            if not line.strip():
+                formatted_lines.append('')
+                in_list = False
+                continue
+                
+            # Fix common spacing issues
+            line = re.sub(r'\s+', ' ', line.strip())
+            
+            # List handling
+            if line.startswith('•') or re.match(r'^\d+\.', line):
+                if not in_list:
+                    formatted_lines.append('')  # Add space before list starts
+                in_list = True
+            else:
+                in_list = False
+            
+            formatted_lines.append(line)
+        
+        # Join lines and clean up multiple spaces
+        text = '\n'.join(formatted_lines)
+        
+        # Fix any broken markdown without changing the markdown itself
+        text = re.sub(r'(?<!\\)\*\*\s+(.+?)\s+\*\*', r'**\1**', text)  # Fix bold
+        text = re.sub(r'(?<!\\)\*\s+(.+?)\s+\*', r'*\1*', text)  # Fix italic
+        text = re.sub(r'(?<!\\)__\s+(.+?)\s+__', r'__\1__', text)  # Fix underline
+        text = re.sub(r'(?<!\\)~~\s+(.+?)\s+~~', r'~~\1~~', text)  # Fix strikethrough
+        
+        # Fix emoji spacing
+        text = re.sub(r'(?<=\S)(?=[✨🧙🤔📝])', ' ', text)
+        text = re.sub(r'(?<=[✨🧙🤔📝])(?=\S)', ' ', text)
+        
+        # Clean up excessive newlines while preserving intentional breaks
         text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
-
-        # Ensure proper spacing around elements
-        text = text.replace('\n•', '\n\n•')
-        text = re.sub(r'(?<=:)\n(?=\s*[•\d])', '\n\n', text)
-
-        # Add spacing after bullets
-        text = re.sub(r'•\s*', '• ', text)
-
-        # Add spacing after numbers
-        text = re.sub(r'(\d+\.)\s*', r'\1 ', text)
-
-        # Clean up final result
+        
+        # Final cleanup
         text = text.strip()
         
         print("\n=== Formatted Output ===")
