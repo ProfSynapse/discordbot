@@ -5,15 +5,13 @@ with improved message formatting and error handling.
 """
 
 import asyncio
-import re
 import json
 import discord
 from discord.ext import commands
 from discord import app_commands
-import textwrap
 import logging
-from typing import List, Dict, Any, Optional, Callable
-from api_client import api_client, APIResponseError
+from typing import Callable
+from api_client import api_client
 from config import config
 from scraper.content_scheduler import ContentScheduler
 from openai import OpenAI
@@ -69,20 +67,36 @@ class MessageFormatter:
     """
     @staticmethod
     def format_response(text: str) -> str:
-        """Just extract response from JSON."""
+        """Extract response from JSON with debug logging"""
         try:
+            logger.debug("=== INPUT TEXT ===")
+            logger.debug(text)
+            
+            # Parse JSON and get response text
             if text.strip().startswith('['):
                 data = json.loads(text)
                 for item in reversed(data):
-                    if isinstance(item, dict) and item.get('response'):
-                        return item['response']
+                    if isinstance(item, dict) and 'response' in item:
+                        response = item['response']
+                        logger.debug("=== RAW RESPONSE ===")
+                        logger.debug(repr(response))  # Use repr to see exact string
+                        return response  # Return exactly as is
+            
             elif text.strip().startswith('{'):
                 data = json.loads(text)
-                if isinstance(data, dict):
-                    return data.get('response', text)
+                if isinstance(data, dict) and 'response' in data:
+                    response = data['response']
+                    logger.debug("=== RAW RESPONSE ===")
+                    logger.debug(repr(response))  # Use repr to see exact string
+                    return response  # Return exactly as is
+            
+            return text
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
             return text
         except Exception as e:
-            logger.error(f"Error extracting response: {e}")
+            logger.error(f"Error in format_response: {e}")
             return text
 
 class DiscordBot(commands.Bot):
@@ -144,42 +158,55 @@ class DiscordBot(commands.Bot):
             await self.scheduler.stop()
         await super().close()
 
-    async def prof(self, interaction: discord.Interaction, *, prompt: str):
-        """
-        Main chat command implementation with improved response formatting.
-        """
+    # In DiscordBot class
+    async def prof(self, interaction: discord.Interaction, prompt: str):
+        """Main chat command with detailed logging"""
         await interaction.response.defer()
         
         try:
-            # Initialize response embed
-            response_embed = self._create_initial_embed(interaction.user, prompt)
-            bot_message = await interaction.followup.send(embed=response_embed)
+            # Send initial thinking message
+            bot_message = await interaction.followup.send(embed=self._create_initial_embed(interaction.user, prompt))
             
-            # Animate thinking state
-            await self._animate_thinking(bot_message, response_embed, prompt)
-            
-            # Build conversation context
-            context = await self._build_context(interaction.channel)
-            
-            # Get AI response
+            # Get response
             async with api_client as client:
                 session_uuid = await client.create_chat_session()
-                logger.info(f"Created session: {session_uuid}")
+                context = await self._build_context(interaction.channel)
                 
                 bot_response = await client.get_response(session_uuid, prompt, context)
-                logger.info("=== Raw AI Response ===")
-                logger.info(bot_response)
                 
-            if not bot_response or bot_response.isspace():
-                raise APIResponseError("Empty response received from API")
-
-            # Format and send final response
-            formatted_response = self.message_formatter.format_response(bot_response)
-            final_embed = self._create_final_embed(interaction.user, prompt, formatted_response)
-            await bot_message.edit(embed=final_embed)
-
+                # Log exact response
+                logger.debug("=== RESPONSE BEFORE FORMATTING ===")
+                logger.debug(repr(bot_response))
+                
+                formatted_response = self.message_formatter.format_response(bot_response)
+                
+                # Log after formatting
+                logger.debug("=== RESPONSE AFTER FORMATTING ===")
+                logger.debug(repr(formatted_response))
+                
+                # Create embed with raw response
+                embed = discord.Embed(color=discord.Color.green())
+                embed.add_field(
+                    name="Question",
+                    value=prompt[:1024],
+                    inline=False
+                )
+                
+                # Log final response being set
+                logger.debug("=== SETTING EMBED VALUE ===")
+                logger.debug(repr(formatted_response[:1024]))
+                
+                embed.add_field(
+                    name="Response",
+                    value=formatted_response[:1024],
+                    inline=False
+                )
+                
+                await bot_message.edit(embed=embed)
+                
         except Exception as e:
-            logger.error(f"Error in prof command: {e}", exc_info=True)
+            logger.error(f"Error: {e}", exc_info=True)
+            # Error handling...
             error_embed = self._create_error_embed()
             if 'bot_message' in locals():
                 await bot_message.edit(embed=error_embed)
