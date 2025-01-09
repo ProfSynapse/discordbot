@@ -67,76 +67,23 @@ class MessageFormatter:
     """
     Handles formatting of bot messages and responses.
     """
-
     @staticmethod
-    def _extract_response_from_json(text: str) -> str:
-        """
-        Extract response field from JSON data if present.
-        """
-        if text.strip().startswith('['):
-            data = json.loads(text)
-            for item in reversed(data):
-                if isinstance(item, dict) and item.get('response'):
-                    return item['response']
-        elif text.strip().startswith('{'):
-            data = json.loads(text)
-            if isinstance(data, dict):
-                return data.get('response', text)
-        return text
-
-    @staticmethod
-    def chunk_message(text: str, max_length: int = 2000) -> List[str]:
-        """
-        Split long messages into chunks while preserving formatting.
-        """
-        if len(text) <= max_length:
-            return [text]
-            
-        chunks = []
-        current_chunk = []
-        current_length = 0
-        
-        # Split by lines to preserve formatting
-        lines = text.split('\n')
-        
-        for line in lines:
-            if len(line) > max_length:
-                # Handle long lines by splitting on spaces
-                words = line.split(' ')
-                current_line = []
-                
-                for word in words:
-                    if current_length + len(' '.join(current_line)) + len(word) + 1 <= max_length:
-                        current_line.append(word)
-                    else:
-                        if current_line:
-                            current_chunk.append(' '.join(current_line))
-                            current_length += len(current_chunk[-1]) + 1
-                        if current_length > 0:
-                            chunks.append('\n'.join(current_chunk))
-                            current_chunk = []
-                            current_length = 0
-                        current_line = [word]
-                
-                if current_line:
-                    current_chunk.append(' '.join(current_line))
-                    current_length += len(current_chunk[-1]) + 1
-                    
-            elif current_length + len(line) + 1 <= max_length:
-                current_chunk.append(line)
-                current_length += len(line) + 1
-            else:
-                chunks.append('\n'.join(current_chunk))
-                current_chunk = [line]
-                current_length = len(line) + 1
-        
-        if current_chunk:
-            chunks.append('\n'.join(current_chunk))
-        
-        # Add part numbers for multiple chunks
-        if len(chunks) > 1:
-            return [f"Part {i+1}/{len(chunks)}:\n{chunk}" for i, chunk in enumerate(chunks)]
-        return chunks
+    def format_response(text: str) -> str:
+        """Just extract response from JSON."""
+        try:
+            if text.strip().startswith('['):
+                data = json.loads(text)
+                for item in reversed(data):
+                    if isinstance(item, dict) and item.get('response'):
+                        return item['response']
+            elif text.strip().startswith('{'):
+                data = json.loads(text)
+                if isinstance(data, dict):
+                    return data.get('response', text)
+            return text
+        except Exception as e:
+            logger.error(f"Error extracting response: {e}")
+            return text
 
 class DiscordBot(commands.Bot):
     """
