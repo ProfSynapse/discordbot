@@ -147,28 +147,36 @@ class DiscordBot(commands.Bot):
 
     @staticmethod
     def format_response(text: str) -> str:
-        """Extract and minimally format the response from JSON."""
+        """Extract and format the response from JSON array."""
         logger.debug("=== Raw Input ===")
         logger.debug(text)
         
         try:
-            # Parse JSON response
-            if text.strip().startswith('{'):
+            # Handle case where input is a JSON array
+            if text.strip().startswith('['):
                 data = json.loads(text)
-                # Extract the response field
+                # Get the last non-empty response from the array
+                for item in reversed(data):
+                    if isinstance(item, dict) and item.get('response'):
+                        text = item['response']
+                        break
+            # Handle case where input is a single JSON object
+            elif text.strip().startswith('{'):
+                data = json.loads(text)
                 if isinstance(data, dict):
                     text = data.get('response', text)
             
-            # Only do minimal cleanup
-            # Remove any leading/trailing whitespace
+            # Remove any leading/trailing whitespace while preserving internal formatting
             text = text.strip()
-            # Fix double spacing
-            text = re.sub(r'\s{3,}', '\n\n', text)
-            # Ensure proper spacing after newlines
-            text = re.sub(r'\n +', '\n', text)
+            
+            # Preserve Discord markdown formatting
+            # Don't collapse multiple newlines to preserve intentional spacing
+            # Only remove spaces at the start of lines
+            text = re.sub(r'^\s+', '', text, flags=re.MULTILINE)
             
         except json.JSONDecodeError:
             logger.debug("Not a JSON response, using raw text")
+            text = text.strip()
         except Exception as e:
             logger.error(f"Error formatting response: {e}")
             
