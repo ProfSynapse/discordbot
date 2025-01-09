@@ -136,82 +136,72 @@ class DiscordBot(commands.Bot):
     @staticmethod
     def format_response(text: str) -> str:
         """Format the response text to ensure proper line breaks and spacing."""
-        # Enhanced logging at start
-        print("\n=== Pre-Formatting ===")
+        print("\n=== Raw Input ===")
         print(text)
-        print("=== End Pre-Formatting ===\n")
+        print("=== End Raw Input ===\n")
         
-        logger.debug("=== Raw Response Before Formatting ===")
-        logger.debug(text)
-        logger.debug("=====================================")
-        
-        # First, normalize newlines
-        text = text.replace('\r\n', '\n').replace('\r', '\n')
-        
-        # Add these cleanup rules near the start of the method
-        text = re.sub(r'(?<=\w)\s+(?=[,\.])', '', text)  # Remove spaces before punctuation
-        text = re.sub(r'(?<=[:;])\s*\n*\s*(?=[A-Za-z])', '\n\n', text)  # Add proper newlines after colons
-        text = re.sub(r'\s+([,.!?])', r'\1', text)  # Remove spaces before punctuation
-        text = re.sub(r'\s{2,}', ' ', text)  # Replace multiple spaces with single space
+        # Try to parse as JSON first
+        try:
+            # Check if the text looks like JSON
+            if text.strip().startswith('{') and text.strip().endswith('}'):
+                import json
+                data = json.loads(text)
+                if isinstance(data, dict):
+                    # Extract message content from JSON if available
+                    text = data.get('text', '') or data.get('content', '') or data.get('message', '') or text
+        except:
+            # If JSON parsing fails, use the raw text
+            pass
 
-        # Handle special characters and emojis
-        emoji_map = {
-            '🧙': '\n🧙',  # Add newline before wizard emoji
-            '•': '\n•',    # Add newline before bullets
-            '1.': '\n1.',  # Add newline before numbered lists
-            '2.': '\n2.',
-            '3.': '\n3.',
-            '4.': '\n4.',
-            '5.': '\n5.',
-            '*': '\n*',    # Add newline before asterisks
-            '🎨': '\n🎨',  # Add newline before palette emoji
-        }
-        
-        # Apply emoji formatting
-        for emoji, replacement in emoji_map.items():
-            text = text.replace(f' {emoji}', replacement)
-        
-        # Special handling for code blocks
-        code_blocks = []
-        text = re.sub(r'```(?:\w+)?\n(.*?)\n```', 
-                     lambda m: code_blocks.append(m.group(0)) and f'CODE_BLOCK_{len(code_blocks)-1}', 
-                     text, flags=re.DOTALL)
-        
-        # Handle bullet points and lists
-        text = re.sub(r'(?:^|\n)\s*[-•]\s*', '\n• ', text, flags=re.MULTILINE)
-        text = re.sub(r'(?:^|\n)\s*(\d+\.)\s*', r'\n\1 ', text, flags=re.MULTILINE)
-        
+        # First, normalize all newlines and remove extra spaces
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        text = re.sub(r'\s+', ' ', text)
+
+        # Handle Markdown headers (# Header)
+        text = re.sub(r'(?m)^#\s*([^\n]+)$', r'\n\n**\1**\n', text)
+        text = re.sub(r'(?m)^##\s*([^\n]+)$', r'\n\n**\1**\n', text)
+
+        # Handle bullet points
+        text = re.sub(r'(?m)^\s*[-•]\s*', '\n• ', text)
+
+        # Handle numbered lists
+        text = re.sub(r'(?m)^\s*(\d+\.)\s*', r'\n\1 ', text)
+
+        # Handle blockquotes
+        text = re.sub(r'(?m)^>\s*(.+)$', r'\n> *\1*\n', text)
+
+        # Handle code blocks
+        text = re.sub(r'```([\s\S]*?)```', r'\n```\1```\n', text)
+
+        # Handle inline code
+        text = re.sub(r'`([^`]+)`', r'`\1`', text)
+
+        # Handle bold and italic
+        text = re.sub(r'\*\*([^*]+)\*\*', r'**\1**', text)
+        text = re.sub(r'\*([^*]+)\*', r'*\1*', text)
+
         # Handle section headers with proper spacing
-        text = re.sub(r'(?:^|\n)([A-Za-z\s]+:)\s*', r'\n\n\1\n', text)
-        
-        # Clean up multiple spaces while preserving intentional newlines
-        text = re.sub(r' +', ' ', text)
+        text = re.sub(r'(?:^|\n)([A-Za-z][A-Za-z\s]+:)\s*', r'\n\n**\1**\n', text)
+
+        # Clean up newlines while preserving intentional breaks
         text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
-        
-        # Restore code blocks
-        for i, block in enumerate(code_blocks):
-            text = text.replace(f'CODE_BLOCK_{i}', f'\n{block}\n')
-        
-        # Ensure proper spacing for sections and lists
+
+        # Ensure proper spacing around elements
         text = text.replace('\n•', '\n\n•')
-        text = text.replace('\n*', '\n\n*')
-        text = re.sub(r'(?<=:)\n(?=\s*[•\d])', '\n\n', text)  # Add space after section headers
-        
-        # Remove extra spaces after bullets and numbers
-        text = re.sub(r'•\s+', '• ', text)
-        text = re.sub(r'(\d+\.)\s+', r'\1 ', text)
-        
+        text = re.sub(r'(?<=:)\n(?=\s*[•\d])', '\n\n', text)
+
+        # Add spacing after bullets
+        text = re.sub(r'•\s*', '• ', text)
+
+        # Add spacing after numbers
+        text = re.sub(r'(\d+\.)\s*', r'\1 ', text)
+
         # Clean up final result
         text = text.strip()
         
-        # Enhanced logging at end
-        print("\n=== Post-Formatting ===")
+        print("\n=== Formatted Output ===")
         print(text)
-        print("=== End Post-Formatting ===\n")
-        
-        logger.debug("=== Formatted Response ===")
-        logger.debug(text)
-        logger.debug("=========================")
+        print("=== End Formatted Output ===\n")
         
         return text
 
@@ -227,21 +217,37 @@ class DiscordBot(commands.Bot):
             query_embed.set_footer(text=f"Asked by {interaction.user.display_name}")
             await interaction.followup.send(embed=query_embed)
             
-            # Get last 10 messages from the channel
+            # Get last 10 messages from the channel with improved logging
             channel = interaction.channel
             messages = [msg async for msg in channel.history(limit=10)]
             messages.reverse()
             
-            # Format message history
+            # Format message history with debug logging
             context = "<recent_channel_conversation>\n"
+            message_count = 0
+            
             for msg in messages:
                 author_name = msg.author.display_name
+                # Skip bot command messages and empty messages
                 if not msg.content.startswith('/') and msg.content.strip():
                     context += f"{author_name}: {msg.content}\n"
+                    message_count += 1
             context += "</recent_channel_conversation>"
+            
+            # Debug logging for context
+            logger.info(f"Built context with {message_count} messages")
+            logger.debug("=== Conversation Context ===")
+            logger.debug(context)
+            logger.debug("=== End Context ===")
             
             async with api_client as client:
                 session_uuid = await client.create_chat_session()
+                logger.info(f"Created session: {session_uuid}")
+                
+                # Log the entire request
+                logger.debug(f"Sending request - Prompt: {prompt}")
+                logger.debug(f"Context length: {len(context)}")
+                
                 bot_response = await client.get_response(session_uuid, prompt, context)
                 
                 # Enhanced logging
@@ -410,14 +416,13 @@ async def process_data_source(message, url: str):
             
             if summary_result.get('success'):
                 summary = summary_result['summary']
-                # Format the summary as an embed
+                # Format the summary as an embed without the reaction footer
                 embed = discord.Embed(
                     title="📝 Article Summary",
                     description=summary,
                     color=discord.Color.blue(),
                     url=url
                 )
-                embed.set_footer(text="React with 📥 to add to my knowledge base")
                 await message.channel.send(embed=embed)
             else:
                 logger.error(f"Failed to generate summary: {summary_result.get('error')}")
