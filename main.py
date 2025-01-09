@@ -67,39 +67,6 @@ class MessageFormatter:
     """
     Handles formatting of bot messages and responses.
     """
-    @staticmethod
-    def format_response(text: str) -> str:
-        """Format response while preserving original structure."""
-        try:
-            # Handle JSON response
-            if text.strip().startswith('['):
-                data = json.loads(text)
-                # Get last non-empty response
-                for item in reversed(data):
-                    if isinstance(item, dict) and item.get('response'):
-                        # Preserve newlines and spacing
-                        response = item['response']
-                        # Replace escaped newlines with actual newlines
-                        response = response.replace('\\n', '\n')
-                        # Preserve multiple newlines
-                        response = re.sub(r'\n\s*\n', '\n\n', response)
-                        return response
-                        
-            elif text.strip().startswith('{'):
-                data = json.loads(text)
-                if isinstance(data, dict):
-                    response = data.get('response', text)
-                    response = response.replace('\\n', '\n')
-                    response = re.sub(r'\n\s*\n', '\n\n', response)
-                    return response
-                        
-            return text.replace('\\n', '\n')
-                
-        except json.JSONDecodeError:
-            return text
-        except Exception as e:
-            logger.error(f"Error formatting response: {e}")
-            return text
 
     @staticmethod
     def _extract_response_from_json(text: str) -> str:
@@ -116,22 +83,6 @@ class MessageFormatter:
             if isinstance(data, dict):
                 return data.get('response', text)
         return text
-
-    @staticmethod
-    def _clean_formatting(text: str) -> str:
-        """
-        Clean up text formatting while preserving markdown syntax.
-        """
-        # Remove trailing spaces/tabs from lines
-        text = re.sub(r'[ \t]+$', '', text, flags=re.MULTILINE)
-        
-        # Clean up multiple consecutive empty lines
-        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
-        
-        # Preserve markdown formatting
-        text = re.sub(r'^\s+(?=[\*\_\~\`\>\#])', '', text, flags=re.MULTILINE)
-        
-        return text.strip()
 
     @staticmethod
     def chunk_message(text: str, max_length: int = 2000) -> List[str]:
