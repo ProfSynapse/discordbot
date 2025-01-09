@@ -8,7 +8,9 @@ Features:
 - Rate limiting and error handling
 """
 
+import asyncio
 import re
+import json
 import discord
 from discord.ext import commands
 from discord import app_commands  # Add this import
@@ -70,6 +72,16 @@ class DiscordBot(commands.Bot):
         super().__init__(command_prefix='/', intents=intents)
         self.scheduler = None
         self.openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+        self.thinking_phrases = [
+            "📜 *Consulting the ancient tomes...*",
+            "🤔 *Pondering the mysteries of the universe...*",
+            "🕸️ *Focusing my neural networks...*",
+            "👵 *Channeling the wisdom of the AI elders...*",
+            "✨ *Weaving threads of knowledge...*",
+            "🔮 *Gazing into the crystal GPU...*",
+            "📚 *Speed-reading the internet...*",
+            "🤓 *Doing some quick quantum calculations...*"
+        ]
         
     async def setup_hook(self):
         """Initialize bot commands and scheduler on startup."""
@@ -135,82 +147,54 @@ class DiscordBot(commands.Bot):
 
     @staticmethod
     def format_response(text: str) -> str:
-        """Format the response text while preserving Discord markdown."""
-        print("\n=== Raw Input ===")
-        print(text)
-        print("=== End Raw Input ===\n")
+        """Extract and minimally format the response from JSON."""
+        logger.debug("=== Raw Input ===")
+        logger.debug(text)
         
-        # Parse JSON if present
         try:
-            if text.strip().startswith('{') and text.strip().endswith('}'):
-                import json
+            # Parse JSON response
+            if text.strip().startswith('{'):
                 data = json.loads(text)
+                # Extract the response field
                 if isinstance(data, dict):
-                    text = data.get('response', '') or data.get('text', '') or data.get('content', '') or text
-        except:
-            pass
-
-        # Initial cleanup while preserving existing markdown
-        lines = text.split('\n')
-        formatted_lines = []
-        in_list = False
-        
-        for line in lines:
-            # Preserve empty lines for spacing
-            if not line.strip():
-                formatted_lines.append('')
-                in_list = False
-                continue
-                
-            # Fix common spacing issues
-            line = re.sub(r'\s+', ' ', line.strip())
+                    text = data.get('response', text)
             
-            # List handling
-            if line.startswith('•') or re.match(r'^\d+\.', line):
-                if not in_list:
-                    formatted_lines.append('')  # Add space before list starts
-                in_list = True
-            else:
-                in_list = False
+            # Only do minimal cleanup
+            # Remove any leading/trailing whitespace
+            text = text.strip()
+            # Fix double spacing
+            text = re.sub(r'\s{3,}', '\n\n', text)
+            # Ensure proper spacing after newlines
+            text = re.sub(r'\n +', '\n', text)
             
-            formatted_lines.append(line)
-        
-        # Join lines and clean up multiple spaces
-        text = '\n'.join(formatted_lines)
-        
-        # Fix any broken markdown without changing the markdown itself
-        text = re.sub(r'(?<!\\)\*\*\s+(.+?)\s+\*\*', r'**\1**', text)  # Fix bold
-        text = re.sub(r'(?<!\\)\*\s+(.+?)\s+\*', r'*\1*', text)  # Fix italic
-        text = re.sub(r'(?<!\\)__\s+(.+?)\s+__', r'__\1__', text)  # Fix underline
-        text = re.sub(r'(?<!\\)~~\s+(.+?)\s+~~', r'~~\1~~', text)  # Fix strikethrough
-        
-        # Fix emoji spacing
-        text = re.sub(r'(?<=\S)(?=[✨🧙🤔📝])', ' ', text)
-        text = re.sub(r'(?<=[✨🧙🤔📝])(?=\S)', ' ', text)
-        
-        # Clean up excessive newlines while preserving intentional breaks
-        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
-        
-        # Final cleanup
-        text = text.strip()
-        
-        print("\n=== Formatted Output ===")
-        print(text)
-        print("=== End Formatted Output ===\n")
+        except json.JSONDecodeError:
+            logger.debug("Not a JSON response, using raw text")
+        except Exception as e:
+            logger.error(f"Error formatting response: {e}")
+            
+        logger.debug("=== Formatted Output ===")
+        logger.debug(text)
         
         return text
 
     async def prof(self, interaction: discord.Interaction, *, prompt: str):
         await interaction.response.defer()
         try:
-            # First, send the user's query as an embed
-            query_embed = discord.Embed(
-                title="🤔 Question",
-                description=prompt,
+            # Create initial embed with question
+            response_embed = discord.Embed(
+                description=f"**Question:**\n{prompt}",
                 color=discord.Color.blurple()
             )
-            query_embed.set_footer(text=f"Asked by {interaction.user.display_name}")
-            await interaction.followup.send(embed=query_embed)
+            response_embed.set_footer(text=f"Asked by {interaction.user.display_name}")
+            
+            # Send initial embed and store message for updating
+            bot_message = await interaction.followup.send(embed=response_embed)
+            
+            # Animate thinking state with phrases
+            for phrase in self.thinking_phrases:
+                response_embed.description = f"**Question:**\n{prompt}\n\n{phrase}"
+                await bot_message.edit(embed=response_embed)
+                await asyncio.sleep(1.5)
             
             # Get last 10 messages from the channel with improved logging
             channel = interaction.channel
@@ -261,23 +245,24 @@ class DiscordBot(commands.Bot):
             # Format the response
             formatted_response = self.format_response(bot_response)
             
-            # Create response embed without title
+            # Create final embed combining question and answer
             response_embed = discord.Embed(
-                description=formatted_response,
                 color=discord.Color.green()
             )
+            response_embed.add_field(
+                name="Question",
+                value=prompt,
+                inline=False
+            )
+            response_embed.add_field(
+                name="Response",
+                value=formatted_response,
+                inline=False
+            )
+            response_embed.set_footer(text=f"Asked by {interaction.user.display_name}")
             
-            # Split response into chunks if needed
-            if len(formatted_response) > 4096:  # Discord's embed description limit
-                chunks = chunk_message_by_paragraphs(formatted_response)
-                for i, chunk in enumerate(chunks, 1):
-                    chunk_embed = discord.Embed(
-                        description=chunk,
-                        color=discord.Color.green()
-                    )
-                    await interaction.followup.send(embed=chunk_embed)
-            else:
-                await interaction.followup.send(embed=response_embed)
+            # Update the message with final response
+            await bot_message.edit(embed=response_embed)
 
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
@@ -286,7 +271,10 @@ class DiscordBot(commands.Bot):
                 description="An error occurred while processing your request. I'll try to fix this and be back shortly!",
                 color=discord.Color.red()
             )
-            await interaction.followup.send(embed=error_embed)  # Fixed syntax error here
+            if 'bot_message' in locals():
+                await bot_message.edit(embed=error_embed)
+            else:
+                await interaction.followup.send(embed=error_embed)
 
     async def generate_image(self, interaction: discord.Interaction, prompt: str, size: ImageSize = ImageSize.SQUARE):
         """Generate an image using DALL-E 3"""
