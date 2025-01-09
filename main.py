@@ -77,16 +77,26 @@ class MessageFormatter:
                 # Get last non-empty response
                 for item in reversed(data):
                     if isinstance(item, dict) and item.get('response'):
-                        return item['response']  # Return response exactly as received
+                        # Preserve newlines and spacing
+                        response = item['response']
+                        # Replace escaped newlines with actual newlines
+                        response = response.replace('\\n', '\n')
+                        # Preserve multiple newlines
+                        response = re.sub(r'\n\s*\n', '\n\n', response)
+                        return response
+                        
             elif text.strip().startswith('{'):
                 data = json.loads(text)
                 if isinstance(data, dict):
-                    return data.get('response', text)  # Return response exactly as received
-                    
-            return text  # If no JSON processing needed, return as-is
-            
+                    response = data.get('response', text)
+                    response = response.replace('\\n', '\n')
+                    response = re.sub(r'\n\s*\n', '\n\n', response)
+                    return response
+                        
+            return text.replace('\\n', '\n')
+                
         except json.JSONDecodeError:
-            return text  # Return original text if not JSON
+            return text
         except Exception as e:
             logger.error(f"Error formatting response: {e}")
             return text
