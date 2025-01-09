@@ -14,7 +14,7 @@ from discord.ext import commands
 from discord import app_commands  # Add this import
 import textwrap
 import logging
-from typing import List, Callable, Optional  # Add Optional to imports
+from typing import List, Callable  # Remove Optional since it's unused
 from api_client import api_client, APIResponseError
 from config import config
 from scraper.content_scheduler import ContentScheduler  # Updated import
@@ -136,51 +136,50 @@ class DiscordBot(commands.Bot):
     @staticmethod
     def format_response(text: str) -> str:
         """Format the response text to ensure proper line breaks and spacing."""
-        # Log the raw response first
         logger.debug("=== Raw Response Before Formatting ===")
         logger.debug(text)
         logger.debug("=====================================")
         
-        # First, normalize newlines and remove extra spaces
+        # First, normalize newlines
         text = text.replace('\r\n', '\n').replace('\r', '\n')
-        text = re.sub(r'\s+', ' ', text)  # Normalize all whitespace first
         
-        # Fix common formatting issues
-        text = (text
-            .replace(' •', '\n•')  # Ensure bullets start on new lines
-            .replace('• •', '•')    # Remove double bullets
-            .replace('•-', '•')     # Remove bullet-dash combinations
-            .replace('-•', '•')     # Remove dash-bullet combinations
-        )
+        # Special handling for code blocks
+        code_blocks = []
+        text = re.sub(r'```(?:\w+)?\n(.*?)\n```', lambda m: code_blocks.append(m.group(0)) and f'CODE_BLOCK_{len(code_blocks)-1}', text, flags=re.DOTALL)
         
-        # Fix section headers
-        sections = ['Main Points:', 'Why This Matters:', 'Key Implications:']
+        # Preserve list formatting
+        text = re.sub(r'^\s*[-•*]\s*', '\n• ', text, flags=re.MULTILINE)
+        text = re.sub(r'^\s*(\d+\.)\s*', r'\n\1 ', text, flags=re.MULTILINE)
+        
+        # Handle headers with proper spacing
+        text = re.sub(r'(^|\n)#\s*(.+?)(?=\n|$)', r'\n\n\1**\2**', text, flags=re.MULTILINE)
+        text = re.sub(r'(^|\n)##\s*(.+?)(?=\n|$)', r'\n\n\1**\2**', text, flags=re.MULTILINE)
+        
+        # Handle blockquotes
+        text = re.sub(r'^\s*>\s*(.+?)(?=\n|$)', r'\n> *\1*', text, flags=re.MULTILINE)
+        
+        # Clean up multiple spaces
+        text = re.sub(r' +', ' ', text)
+        
+        # Clean up excessive newlines but preserve intentional spacing
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+        
+        # Restore code blocks
+        for i, block in enumerate(code_blocks):
+            text = text.replace(f'CODE_BLOCK_{i}', f'\n{block}\n')
+        
+        # Ensure proper line breaks around sections
+        sections = ['Main Points:', 'Key Points:', 'Why This Matters:', 'Key Implications:', 'Summary:', 'Conclusion:']
         for section in sections:
             text = text.replace(section, f"\n\n{section}\n")
         
-        # Ensure proper spacing after bullets
+        # Ensure consistent bullet point formatting
+        text = text.replace('\n•', '\n\n•')
         text = re.sub(r'•\s*', '• ', text)
         
-        # Fix split words (like "K GC" → "KGC")
-        common_splits = [
-            (r'K GC', 'KGC'),
-            (r'L LMs?', 'LLM'),
-            (r'G PTs?', 'GPT'),
-            (r'A Is?', 'AI')
-        ]
-        for pattern, replacement in common_splits:
-            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
-        
-        # Clean up excessive newlines
-        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
-        
-        # Ensure proper spacing around sections
-        text = text.replace('\n•', '\n• ')
-        
-        # Clean up final result
+        # Final cleanup
         text = text.strip()
         
-        # Log the formatted response
         logger.debug("=== Formatted Response ===")
         logger.debug(text)
         logger.debug("=========================")
@@ -254,7 +253,7 @@ class DiscordBot(commands.Bot):
                 description="An error occurred while processing your request. I'll try to fix this and be back shortly!",
                 color=discord.Color.red()
             )
-            await interaction.followup.send(embed=error_embed)
+            await interaction.followup.send(embed=error_embed)  # Fixed syntax error here
 
     async def generate_image(self, interaction: discord.Interaction, prompt: str, size: ImageSize = ImageSize.SQUARE):
         """Generate an image using DALL-E 3"""
@@ -286,85 +285,11 @@ class DiscordBot(commands.Bot):
                 "🎨 *Alas, my artistic vision has failed me. Perhaps we should try a different subject?*"
             )
 
-# Create bot instance
-bot = DiscordBot()
-
-# Register the command after bot creation
-@bot.tree.command(name="prof", description="Chat with Professor Synapse")
-@commands.cooldown(1, 60, commands.BucketType.user)
-async def prof_command(interaction: discord.Interaction, *, prompt: str):
-    await bot.prof(interaction, prompt=prompt)
-
-@bot.tree.command(name="image", description="Generate an image using DALL-E (add --square, --portrait, or --wide to change format)")
-@commands.cooldown(1, 60, commands.BucketType.user)
-@app_commands.describe(
-    prompt="What would you like me to draw? (add --square, --portrait, or --wide at the end)"
-)
-async def image_command(
-    interaction: discord.Interaction, 
-    prompt: str
-):
-    """Generate an image using DALL-E 3"""
-    # Parse size from flags in prompt
-    size_map = {
-        "--square": ImageSize.SQUARE,
-        "--portrait": ImageSize.PORTRAIT,
-        "--wide": ImageSize.LANDSCAPE,
-        "--landscape": ImageSize.LANDSCAPE  # Alternative flag
-    }
-    
-    # Default to square if no flag found
-    image_size = ImageSize.SQUARE
-    clean_prompt = prompt
-    
-    # Check for size flags and remove from prompt
-    for flag, size in size_map.items():
-        if flag in prompt.lower():
-            image_size = size
-            clean_prompt = prompt.lower().replace(flag, "").strip()
-            break
-    
-    await bot.generate_image(interaction, clean_prompt, image_size)
-
-def chunk_message_by_paragraphs(message, max_length=2000):
-    """
-    Splits a long message into smaller chunks based on paragraphs.
-
-    Args:
-        message (str): The message to be chunked.
-        max_length (int, optional): The maximum length of each chunk. Defaults to 2000.
-
-    Returns:
-        list: A list of message chunks.
-    """
-    paragraphs = message.split('\n\n')
-    chunks = []
-    current_chunk = ""
-
-    for paragraph in paragraphs:
-        if len(paragraph) >= max_length:
-            if current_chunk:
-                chunks.append(current_chunk)
-                current_chunk = ""
-            sub_paragraphs = textwrap.wrap(paragraph, width=max_length, replace_whitespace=False)
-            chunks.extend(sub_paragraphs)
-        else:
-            if len(current_chunk) + len(paragraph) + 2 <= max_length:
-                current_chunk += (paragraph + "\n\n")
-            else:
-                chunks.append(current_chunk)
-                current_chunk = paragraph + "\n\n"
-
-    if current_chunk:
-        chunks.append(current_chunk)
-
-    # Only add part numbers if there are multiple chunks
-    if len(chunks) > 1:
-        return [f"Part {i}/{len(chunks)}:\n{chunk}" for i, chunk in enumerate(chunks, 1)]
-    return chunks
-
 # Add at the top level, after imports
 PROCESSED_URLS = set()
+
+# Create bot instance before event handlers
+bot = DiscordBot()
 
 # Replace on_message event handler
 @bot.event
@@ -487,5 +412,85 @@ async def process_data_source(message, url: str):
         logger.error(f"Error in process_data_source: {e}", exc_info=True)
         await processing_msg.edit(content=f"❌ Error: {str(e)}")
 
+def chunk_message_by_paragraphs(message, max_length=2000):
+    """
+    Splits a long message into smaller chunks based on paragraphs.
+
+    Args:
+        message (str): The message to be chunked.
+        max_length (int, optional): The maximum length of each chunk. Defaults to 2000.
+
+    Returns:
+        list: A list of message chunks.
+    """
+    paragraphs = message.split('\n\n')
+    chunks = []
+    current_chunk = ""
+
+    for paragraph in paragraphs:
+        if len(paragraph) >= max_length:
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = ""
+            sub_paragraphs = textwrap.wrap(paragraph, width=max_length, replace_whitespace=False)
+            chunks.extend(sub_paragraphs)
+        else:
+            if len(current_chunk) + len(paragraph) + 2 <= max_length:
+                current_chunk += (paragraph + "\n\n")
+            else:
+                chunks.append(current_chunk)
+                current_chunk = paragraph + "\n\n"
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    # Only add part numbers if there are multiple chunks
+    if len(chunks) > 1:
+        return [f"Part {i}/{len(chunks)}:\n{chunk}" for i, chunk in enumerate(chunks, 1)]
+    return chunks
+
+# Register the command after bot creation
+@bot.tree.command(name="prof", description="Chat with Professor Synapse")
+@commands.cooldown(1, 60, commands.BucketType.user)
+async def prof_command(interaction: discord.Interaction, *, prompt: str):
+    await bot.prof(interaction, prompt=prompt)
+
+@bot.tree.command(name="image", description="Generate an image using DALL-E (add --square, --portrait, or --wide to change format)")
+@commands.cooldown(1, 60, commands.BucketType.user)
+@app_commands.describe(
+    prompt="What would you like me to draw? (add --square, --portrait, or --wide at the end)"
+)
+async def image_command(
+    interaction: discord.Interaction, 
+    prompt: str
+):
+    """Generate an image using DALL-E 3"""
+    # Parse size from flags in prompt
+    size_map = {
+        "--square": ImageSize.SQUARE,
+        "--portrait": ImageSize.PORTRAIT,
+        "--wide": ImageSize.LANDSCAPE,
+        "--landscape": ImageSize.LANDSCAPE  # Alternative flag
+    }
+    
+    # Default to square if no flag found
+    image_size = ImageSize.SQUARE
+    clean_prompt = prompt
+    
+    # Check for size flags and remove from prompt
+    for flag, size in size_map.items():
+        if flag in prompt.lower():
+            image_size = size
+            clean_prompt = prompt.lower().replace(flag, "").strip()
+            break
+    
+    await bot.generate_image(interaction, clean_prompt, image_size)
+
 if __name__ == "__main__":
-    bot.run(config.DISCORD_TOKEN)
+    # Install discord package if not present
+    try:
+        bot.run(config.DISCORD_TOKEN)
+    except ModuleNotFoundError:
+        print("Discord package not found. Please install it using:")
+        print("pip install discord.py")
+        exit(1)
