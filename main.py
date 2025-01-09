@@ -69,49 +69,45 @@ class MessageFormatter:
     """
     @staticmethod
     def format_response(text: str) -> str:
-        """
-        Format API response while preserving Discord markdown and formatting.
-        Handles both JSON and plain text responses.
-        """
+        """Format response preserving newlines and markdown."""
         logger.debug("=== Raw Input ===")
         logger.debug(text)
         
         try:
-            # Extract response from JSON if necessary
-            text = MessageFormatter._extract_response_from_json(text)
-            
-            # Split into lines and clean while preserving formatting
+            # Extract text from JSON if needed
+            if text.strip().startswith('['):
+                data = json.loads(text)
+                for item in reversed(data):
+                    if isinstance(item, dict) and item.get('response'):
+                        text = item['response']
+                        break
+                        
+            # Split into lines and process each line while preserving structure
             lines = text.split('\n')
+            formatted_lines = []
             
-            # Remove empty lines at start/end
-            while lines and not lines[0].strip():
-                lines.pop(0)
-            while lines and not lines[-1].strip():
-                lines.pop()
-                
-            # Clean each line while preserving markdown
-            cleaned_lines = []
             for line in lines:
-                # Preserve markdown indicators at start of lines
-                if re.match(r'[\*\_\~\`\>\#]', line.lstrip()):
-                    cleaned_lines.append(line.rstrip())
-                else:
-                    cleaned_lines.append(line.strip())
+                line = line.rstrip()  # Only remove trailing whitespace
+                if line.lstrip().startswith(('•', '-', '*', '1.', '2.', '3.')):  # Bullet points
+                    formatted_lines.append(line)  # Preserve indentation for lists
+                elif line.strip():  # Non-empty lines
+                    formatted_lines.append(line.strip())
+                else:  # Empty lines
+                    formatted_lines.append('')  # Keep empty lines for spacing
+                    
+            # Rejoin with newlines
+            text = '\n'.join(formatted_lines)
             
-            # Rejoin with proper newlines
-            text = '\n'.join(cleaned_lines)
+            # Clean up multiple consecutive empty lines
+            text = re.sub(r'\n{3,}', '\n\n', text)
             
-            # Clean up any remaining formatting issues
-            text = MessageFormatter._clean_formatting(text)
-            
-            logger.debug("=== Formatted Output ===")
-            logger.debug(text)
-            
-            return text
-            
+        except json.JSONDecodeError:
+            logger.debug("Not a JSON response, using raw text")
+            text = text.strip()
         except Exception as e:
             logger.error(f"Error formatting response: {e}")
-            return text.strip()
+        
+        return text
 
     @staticmethod
     def _extract_response_from_json(text: str) -> str:
@@ -310,18 +306,68 @@ class DiscordBot(commands.Bot):
         return embed
 
     def _create_final_embed(self, user: discord.User, prompt: str, response: str) -> discord.Embed:
-        """Create the final response embed with both question and answer."""
+        """
+        Create the final response embed with question and formatted answer.
+        Handles long responses by splitting into multiple fields while preserving formatting.
+        
+        Args:
+            user: Discord user who asked the question
+            prompt: The original question
+            response: The formatted response text
+            
+        Returns:
+            discord.Embed: Formatted embed with question and response
+        """
         embed = discord.Embed(color=discord.Color.green())
-        embed.add_field(
-            name="Question",
-            value=prompt,
-            inline=False
-        )
-        embed.add_field(
-            name="Response",
-            value=response,
-            inline=False
-        )
+        
+        # Handle prompt field - chunk if necessary
+        if len(prompt) > 1024:
+            embed.add_field(
+                name="Question",
+                value=f"{prompt[:1021]}...",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="Question",
+                value=prompt,
+                inline=False
+            )
+
+        # Handle response field(s)
+        if len(response) <= 1024:
+            # Single response field
+            embed.add_field(
+                name="Response",
+                value=response,
+                inline=False
+            )
+        else:
+            # Split response into chunks while preserving formatting
+            chunks = textwrap.wrap(
+                response,
+                width=1024,
+                replace_whitespace=False,
+                break_long_words=False,
+                break_on_hyphens=False,
+                expand_tabs=False
+            )
+            
+            # Add each chunk as a separate field
+            for i, chunk in enumerate(chunks, 1):
+                # Clean up chunk formatting
+                chunk = chunk.rstrip()  # Remove trailing whitespace
+                
+                # If it's not the first chunk and starts with a list marker, add newline
+                if i > 1 and any(chunk.lstrip().startswith(marker) for marker in ['•', '-', '*', '1.', '2.', '3.']):
+                    chunk = '\n' + chunk
+                    
+                embed.add_field(
+                    name=f"Response (Part {i}/{len(chunks)})",
+                    value=chunk,
+                    inline=False
+                )
+        
         embed.set_footer(text=f"Asked by {user.display_name}")
         return embed
 
