@@ -53,6 +53,19 @@ class ContentScheduler:
             self._initialize_channels()
             self.running = True
             
+            # Check last 100 messages in both channels
+            self.seen_videos = self._load_seen_videos()
+            
+            # Add check of recent YouTube posts
+            async for message in self.youtube_channel.history(limit=100):
+                if message.embeds:
+                    for embed in message.embeds:
+                        if embed.url:
+                            self.seen_videos.add(embed.url)
+                            logger.info(f"Found existing video: {embed.url}")
+            
+            logger.info(f"Loaded {len(self.seen_videos)} previously posted videos")
+            
             # Check last 100 messages in the channel to build initial posted_urls set
             async for message in self.news_channel.history(limit=100):
                 urls = [word for word in message.content.split() 

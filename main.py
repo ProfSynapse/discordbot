@@ -136,6 +136,11 @@ class DiscordBot(commands.Bot):
     @staticmethod
     def format_response(text: str) -> str:
         """Format the response text to ensure proper line breaks and spacing."""
+        # Enhanced logging at start
+        print("\n=== Pre-Formatting ===")
+        print(text)
+        print("=== End Pre-Formatting ===\n")
+        
         logger.debug("=== Raw Response Before Formatting ===")
         logger.debug(text)
         logger.debug("=====================================")
@@ -199,6 +204,11 @@ class DiscordBot(commands.Bot):
         # Clean up final result
         text = text.strip()
         
+        # Enhanced logging at end
+        print("\n=== Post-Formatting ===")
+        print(text)
+        print("=== End Post-Formatting ===\n")
+        
         logger.debug("=== Formatted Response ===")
         logger.debug(text)
         logger.debug("=========================")
@@ -234,10 +244,15 @@ class DiscordBot(commands.Bot):
                 session_uuid = await client.create_chat_session()
                 bot_response = await client.get_response(session_uuid, prompt, context)
                 
-                logger.debug("=" * 50)
-                logger.debug("Raw bot response received:")
-                logger.debug(bot_response)
-                logger.debug("=" * 50)
+                # Enhanced logging
+                logger.info("=== Raw AI Response ===")
+                logger.info(bot_response)
+                logger.info("=== End Raw Response ===")
+                
+                # Also log to console for immediate visibility
+                print("\n=== Raw AI Response ===")
+                print(bot_response)
+                print("=== End Raw Response ===\n")
 
             if not bot_response or bot_response.isspace():
                 raise APIResponseError("Empty response received from API")
