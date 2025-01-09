@@ -143,6 +143,12 @@ class DiscordBot(commands.Bot):
         # First, normalize newlines
         text = text.replace('\r\n', '\n').replace('\r', '\n')
         
+        # Add these cleanup rules near the start of the method
+        text = re.sub(r'(?<=\w)\s+(?=[,\.])', '', text)  # Remove spaces before punctuation
+        text = re.sub(r'(?<=[:;])\s*\n*\s*(?=[A-Za-z])', '\n\n', text)  # Add proper newlines after colons
+        text = re.sub(r'\s+([,.!?])', r'\1', text)  # Remove spaces before punctuation
+        text = re.sub(r'\s{2,}', ' ', text)  # Replace multiple spaces with single space
+
         # Handle special characters and emojis
         emoji_map = {
             '🧙': '\n🧙',  # Add newline before wizard emoji

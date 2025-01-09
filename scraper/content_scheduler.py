@@ -11,6 +11,8 @@ from googleapiclient.errors import HttpError
 from config import config  # Changed from relative import
 import html  # Add this import at the top
 from google.oauth2.credentials import Credentials
+import json
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,7 +39,8 @@ class ContentScheduler:
         self._schedule_task = None
         self._news_drip_task = None
         self._youtube_drip_task = None
-        self.seen_videos = set()
+        self.seen_videos_file = 'seen_videos.json'
+        self.seen_videos = self._load_seen_videos()
         self.news_channel = None
         self.youtube_channel = None
         self.scraped_urls = set()  # Moved here from news_scraper.py
@@ -111,6 +114,7 @@ class ContentScheduler:
         asyncio.create_task(self._monitor_tasks())
 
     async def stop(self) -> None:
+        self._save_seen_videos()  # Save seen videos before stopping
         self.running = False
         for task in [self._schedule_task, self._news_drip_task, self._youtube_drip_task]:
             if task:
@@ -200,7 +204,7 @@ class ContentScheduler:
         return datetime.now(date.tzinfo) - date <= timedelta(hours=24)
 
     def _is_new_and_recent(self, article: Dict[str, Any], hours: int = 24) -> bool:
-        """Check if an article is both new (not posted) and recent."""
+        """Check if an article is both new (not posted) and recent.""" 
         try:
             published = datetime.fromisoformat(article['published'])
             recent_enough = (datetime.now(published.tzinfo) - published) <= timedelta(hours=hours)
@@ -362,6 +366,12 @@ class ContentScheduler:
                         
                         if self.youtube_channel and self.youtube_queue:
                             video = self.youtube_queue.pop(0)
+                            
+                            # Skip if already seen
+                            if video['url'] in self.seen_videos:
+                                logger.info(f"Skipping already posted video: {video['url']}")
+                                continue
+                                
                             try:
                                 embed = discord.Embed(
                                     title=video['title'],
@@ -372,10 +382,13 @@ class ContentScheduler:
                                 embed.set_footer(text=f"Posted by {video['author']}")
                                 message = await self.youtube_channel.send(embed=embed)
                                 await message.add_reaction("📥")  # Add “inbox tray” reaction
+                                self.seen_videos.add(video['url'])
+                                self._save_seen_videos()  # Save after successful post
                                 logger.info(f"Posted YouTube video: {video['title']}")
                             except Exception as e:
                                 logger.error(f"Failed to post video: {e}")
-                                self.youtube_queue.insert(0, video)
+                                if video['url'] not in self.seen_videos:
+                                    self.youtube_queue.insert(0, video)
                     else:
                         await asyncio.sleep(300)  # Check every 5 minutes if queue empty
                 else:
@@ -412,12 +425,23 @@ class ContentScheduler:
                 logger.error(f"Error in task monitor: {e}")
                 await asyncio.sleep(60)
 
-    # ...rest of existing code...
+    def _load_seen_videos(self) -> set:
+        """Load previously seen videos from file."""
+        try:
+            if os.path.exists(self.seen_videos_file):
+                with open(self.seen_videos_file, 'r') as f:
+                    return set(json.load(f))
+            return set()
+        except Exception as e:
+            logger.error(f"Error loading seen videos: {e}")
+            return set()
 
-                                
-                await asyncio.sleep(60)  # Check every minute
-            except Exception as e:
-                logger.error(f"Error in task monitor: {e}")
-                await asyncio.sleep(60)
+    def _save_seen_videos(self) -> None:
+        """Save seen videos to file."""
+        try:
+            with open(self.seen_videos_file, 'w') as f:
+                json.dump(list(self.seen_videos), f)
+        except Exception as e:
+            logger.error(f"Error saving seen videos: {e}")
 
     # ...rest of existing code...
