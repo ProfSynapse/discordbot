@@ -156,69 +156,59 @@ class GPTTrainerAPI:
         return APIResponse(success=False, error=str(last_error))
 
     async def _stream_response(self, endpoint: str, data: Dict[str, Any]) -> AsyncGenerator[str, None]:
-        """Handle streaming responses with improved chunk processing."""
+        """Handle streaming responses with minimal processing."""
         if not self._session:
             self._session = aiohttp.ClientSession(timeout=self.timeout)
 
         url = f'{self.base_url}/{endpoint}'
-        try:
-            async with self._lock:
-                async with self._session.post(url, headers=self.headers, json=data) as response:
-                    response.raise_for_status()
-                    
-                    async for line in response.content.iter_any():
-                        if line:
-                            try:
-                                decoded = line.decode('utf-8').strip()
-                                if decoded.startswith('data: '):
-                                    decoded = decoded[6:]
-                                if decoded:
-                                    yield decoded
-                            except Exception as e:
-                                logger.error(f"Stream decode error: {e}")
-                                continue
-        except Exception as e:
-            logger.error(f"Streaming error: {e}")
-            raise
-
-    async def create_chat_session(self) -> str:
-        """Create a new chat session."""
-        endpoint = f'chatbot/{config.CHATBOT_UUID}/session/create'
-        response = await self._make_request('POST', endpoint)
-        if response.success and response.data:
-            return response.data.get('uuid', '')
-        raise APIResponseError("Failed to create chat session")
+        
+        async with self._lock:
+            async with self._session.post(url, headers=self.headers, json=data) as response:
+                response.raise_for_status()
+                
+                async for line in response.content.iter_any():
+                    if line:
+                        try:
+                            decoded = line.decode('utf-8')
+                            if decoded.startswith('data: '):
+                                decoded = decoded[6:]  # Remove 'data: ' prefix
+                            if decoded.strip():  # Only yield non-empty chunks
+                                yield decoded
+                        except Exception as e:
+                            logger.error(f"Stream decode error: {e}")
+                            continue
 
     async def get_response(self, session_uuid: str, message: str, context: str = "") -> str:
-        """Get an AI response with improved text handling."""
+        """Get an AI response with minimal processing."""
         try:
             endpoint = f'session/{session_uuid}/message/stream'
             query = f"{context}\n\nUser: {message}" if context else f"User: {message}"
             
-            chunks = []
-            last_chunk_ended_with_space = False
+            response_chunks = []
             
             async for chunk in self._stream_response(endpoint, {'query': query}):
-                processed = self.processor.process_chunk(chunk)
-                if processed:
-                    if chunks and not last_chunk_ended_with_space and not processed.startswith(' '):
-                        chunks.append(' ')
-                    chunks.append(processed)
-                    last_chunk_ended_with_space = processed.endswith(' ')
-            
-            response = ''.join(chunks)
-            clean_response = self.processor.clean_text(response)
-            
-            return clean_response or "I apologize, but I couldn't generate a response."
+                try:
+                    # Parse JSON only if needed
+                    data = json.loads(chunk)
+                    if isinstance(data, dict) and 'text' in data:
+                        response_chunks.append(data['text'])
+                except json.JSONDecodeError:
+                    # If not JSON, append as is
+                    response_chunks.append(chunk)
                     
+            # Simply join the chunks
+            final_response = ''.join(response_chunks)
+            
+            return final_response if final_response else "I apologize, but I couldn't generate a response."
+                        
         except Exception as e:
-            logger.error(f"Response error: {e}")
+            logger.error(f"Error in get_response: {e}")
             try:
                 # Fallback to new session
                 new_session_uuid = await self.create_chat_session()
                 return await self.get_response(new_session_uuid, message, context)
             except Exception as retry_error:
-                logger.error(f"Fallback failed: {retry_error}")
+                logger.error(f"Retry failed: {retry_error}")
                 return "I'm having trouble processing your request. Please try again."
 
     async def upload_data_source(self, url: str) -> APIResponse:

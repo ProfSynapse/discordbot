@@ -4,7 +4,6 @@ This bot integrates with GPT Trainer API to provide conversational AI capabiliti
 Simplified version with removed redundant processing.
 """
 
-import asyncio
 import discord
 from discord.ext import commands
 from discord import app_commands
