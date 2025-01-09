@@ -143,41 +143,54 @@ class DiscordBot(commands.Bot):
         # First, normalize newlines
         text = text.replace('\r\n', '\n').replace('\r', '\n')
         
+        # Handle special characters and emojis
+        emoji_map = {
+            '🧙': '\n🧙',  # Add newline before wizard emoji
+            '•': '\n•',    # Add newline before bullets
+            '1.': '\n1.',  # Add newline before numbered lists
+            '2.': '\n2.',
+            '3.': '\n3.',
+            '4.': '\n4.',
+            '5.': '\n5.',
+            '*': '\n*',    # Add newline before asterisks
+            '🎨': '\n🎨',  # Add newline before palette emoji
+        }
+        
+        # Apply emoji formatting
+        for emoji, replacement in emoji_map.items():
+            text = text.replace(f' {emoji}', replacement)
+        
         # Special handling for code blocks
         code_blocks = []
-        text = re.sub(r'```(?:\w+)?\n(.*?)\n```', lambda m: code_blocks.append(m.group(0)) and f'CODE_BLOCK_{len(code_blocks)-1}', text, flags=re.DOTALL)
+        text = re.sub(r'```(?:\w+)?\n(.*?)\n```', 
+                     lambda m: code_blocks.append(m.group(0)) and f'CODE_BLOCK_{len(code_blocks)-1}', 
+                     text, flags=re.DOTALL)
         
-        # Preserve list formatting
-        text = re.sub(r'^\s*[-•*]\s*', '\n• ', text, flags=re.MULTILINE)
-        text = re.sub(r'^\s*(\d+\.)\s*', r'\n\1 ', text, flags=re.MULTILINE)
+        # Handle bullet points and lists
+        text = re.sub(r'(?:^|\n)\s*[-•]\s*', '\n• ', text, flags=re.MULTILINE)
+        text = re.sub(r'(?:^|\n)\s*(\d+\.)\s*', r'\n\1 ', text, flags=re.MULTILINE)
         
-        # Handle headers with proper spacing
-        text = re.sub(r'(^|\n)#\s*(.+?)(?=\n|$)', r'\n\n\1**\2**', text, flags=re.MULTILINE)
-        text = re.sub(r'(^|\n)##\s*(.+?)(?=\n|$)', r'\n\n\1**\2**', text, flags=re.MULTILINE)
+        # Handle section headers with proper spacing
+        text = re.sub(r'(?:^|\n)([A-Za-z\s]+:)\s*', r'\n\n\1\n', text)
         
-        # Handle blockquotes
-        text = re.sub(r'^\s*>\s*(.+?)(?=\n|$)', r'\n> *\1*', text, flags=re.MULTILINE)
-        
-        # Clean up multiple spaces
+        # Clean up multiple spaces while preserving intentional newlines
         text = re.sub(r' +', ' ', text)
-        
-        # Clean up excessive newlines but preserve intentional spacing
         text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
         
         # Restore code blocks
         for i, block in enumerate(code_blocks):
             text = text.replace(f'CODE_BLOCK_{i}', f'\n{block}\n')
         
-        # Ensure proper line breaks around sections
-        sections = ['Main Points:', 'Key Points:', 'Why This Matters:', 'Key Implications:', 'Summary:', 'Conclusion:']
-        for section in sections:
-            text = text.replace(section, f"\n\n{section}\n")
-        
-        # Ensure consistent bullet point formatting
+        # Ensure proper spacing for sections and lists
         text = text.replace('\n•', '\n\n•')
-        text = re.sub(r'•\s*', '• ', text)
+        text = text.replace('\n*', '\n\n*')
+        text = re.sub(r'(?<=:)\n(?=\s*[•\d])', '\n\n', text)  # Add space after section headers
         
-        # Final cleanup
+        # Remove extra spaces after bullets and numbers
+        text = re.sub(r'•\s+', '• ', text)
+        text = re.sub(r'(\d+\.)\s+', r'\1 ', text)
+        
+        # Clean up final result
         text = text.strip()
         
         logger.debug("=== Formatted Response ===")
@@ -226,9 +239,8 @@ class DiscordBot(commands.Bot):
             # Format the response
             formatted_response = self.format_response(bot_response)
             
-            # Create response embed
+            # Create response embed without title
             response_embed = discord.Embed(
-                title="🧠 Professor Synapse's Response",
                 description=formatted_response,
                 color=discord.Color.green()
             )
@@ -238,7 +250,6 @@ class DiscordBot(commands.Bot):
                 chunks = chunk_message_by_paragraphs(formatted_response)
                 for i, chunk in enumerate(chunks, 1):
                     chunk_embed = discord.Embed(
-                        title=f"🧠 Professor Synapse's Response (Part {i}/{len(chunks)})",
                         description=chunk,
                         color=discord.Color.green()
                     )
