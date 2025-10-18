@@ -28,10 +28,12 @@ class BotConfig:
     DISCORD_TOKEN: str  # Discord bot authentication token
     GPT_TRAINER_TOKEN: str  # GPT Trainer API authentication token
     CHATBOT_UUID: str  # Unique identifier for the chatbot instance
-    NEWS_CHANNEL_ID: int  # Discord channel ID for news articles
-    OPENAI_API_KEY: str  # OpenAI API key for DALL-E
-    YOUTUBE_CHANNEL_ID: int  # Discord channel for YouTube updates
-    YOUTUBE_API_KEY: str  # YouTube API key
+    GOOGLE_API_KEY: str  # Google API key for Imagen
+    
+    # Optional parameters for content scheduling
+    CONTENT_CHANNEL_ID: Optional[int] = None  # Discord channel ID for automated content (news + YouTube)
+    YOUTUBE_API_KEY: Optional[str] = None  # YouTube API key (optional)
+    OPENAI_API_KEY: Optional[str] = None  # OpenAI API key for DALL-E (deprecated)
     
     # Optional parameters with defaults
     LOG_LEVEL: str = 'INFO'  # Logging level (INFO, DEBUG, etc.)
@@ -55,10 +57,10 @@ class BotConfig:
             DISCORD_TOKEN=os.environ['DISCORD_TOKEN'],
             GPT_TRAINER_TOKEN=os.environ['GPT_TRAINER_TOKEN'],
             CHATBOT_UUID=os.environ['CHATBOT_UUID'],
-            NEWS_CHANNEL_ID=int(os.environ['NEWS_CHANNEL_ID']),
-            OPENAI_API_KEY=os.environ['OPENAI_API_KEY'],
-            YOUTUBE_CHANNEL_ID=int(os.environ['YOUTUBE_CHANNEL_ID']),
-            YOUTUBE_API_KEY=os.environ['YOUTUBE_API_KEY'],
+            GOOGLE_API_KEY=os.environ['GOOGLE_API_KEY'],
+            CONTENT_CHANNEL_ID=int(os.environ['CONTENT_CHANNEL_ID']) if 'CONTENT_CHANNEL_ID' in os.environ else None,
+            YOUTUBE_API_KEY=os.environ.get('YOUTUBE_API_KEY'),
+            OPENAI_API_KEY=os.environ.get('OPENAI_API_KEY'),
             LOG_LEVEL=os.environ.get('LOG_LEVEL', 'INFO'),
             MAX_MESSAGE_LENGTH=int(os.environ.get('MAX_MESSAGE_LENGTH', '2000')),
             MAX_HISTORY_MESSAGES=int(os.environ.get('MAX_HISTORY_MESSAGES', '100')),

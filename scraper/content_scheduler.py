@@ -13,6 +13,7 @@ import html  # Add this import at the top
 from google.oauth2.credentials import Credentials
 import json
 import os
+from api_client import api_client  # Import the GPT Trainer API client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,10 +29,9 @@ class ContentScheduler:
         "WesRoth":"UCqcbQf6yw5KzRoDDcZ_wBSw"
     }
     
-    def __init__(self, bot, news_channel_id: int, youtube_channel_id: int):
+    def __init__(self, bot, content_channel_id: int):
         self.bot = bot
-        self.news_channel_id = news_channel_id
-        self.youtube_channel_id = youtube_channel_id
+        self.content_channel_id = content_channel_id
         self.news_queue: List[Dict[str, Any]] = []  # Separate queue for news
         self.youtube_queue: List[Dict[str, Any]] = []  # Separate queue for YouTube
         self.articles_queue = []  # Remove this or keep for backwards compatibility
@@ -41,8 +41,7 @@ class ContentScheduler:
         self._youtube_drip_task = None
         self.seen_videos_file = 'seen_videos.json'
         self.seen_videos = self._load_seen_videos()
-        self.news_channel = None
-        self.youtube_channel = None
+        self.content_channel = None  # Single channel for all content
         self.scraped_urls = set()  # Moved here from news_scraper.py
         self.youtube = build('youtube', 'v3', developerKey=config.YOUTUBE_API_KEY)
         self.posted_urls = set()  # Add this line to track posted URLs
@@ -57,7 +56,7 @@ class ContentScheduler:
             self.seen_videos = self._load_seen_videos()
             
             # Add check of recent YouTube posts
-            async for message in self.youtube_channel.history(limit=100):
+            async for message in self.content_channel.history(limit=100):
                 if message.embeds:
                     for embed in message.embeds:
                         if embed.url:
@@ -67,7 +66,7 @@ class ContentScheduler:
             logger.info(f"Loaded {len(self.seen_videos)} previously posted videos")
             
             # Check last 100 messages in the channel to build initial posted_urls set
-            async for message in self.news_channel.history(limit=100):
+            async for message in self.content_channel.history(limit=100):
                 urls = [word for word in message.content.split() 
                        if word.startswith(("http://", "https://"))]
                 self.posted_urls.update(urls)
@@ -79,10 +78,12 @@ class ContentScheduler:
             if self.news_queue:
                 article = self.news_queue.pop(0)
                 try:
-                    message = await self.news_channel.send(article['url'])
-                    await message.add_reaction("📥")
+                    message = await self.content_channel.send(article['url'])
                     self.posted_urls.add(article['url'])
                     logger.info(f"Posted startup article URL: {article['url']}")
+                    
+                    # Automatically upload to GPT Trainer
+                    await self._upload_to_gpt_trainer(article['url'], 'article')
                 except Exception as e:
                     logger.error(f"Failed to post startup article: {e}")
                     self.news_queue.insert(0, article)
@@ -98,9 +99,11 @@ class ContentScheduler:
                     )
                     embed.set_image(url=video['thumbnail_url'])
                     embed.set_footer(text=f"Posted by {video['author']}")
-                    message = await self.youtube_channel.send(embed=embed)
-                    await message.add_reaction("📥")
+                    message = await self.content_channel.send(embed=embed)
                     logger.info(f"Posted startup YouTube video: {video['title']}")
+                    
+                    # Automatically upload to GPT Trainer
+                    await self._upload_to_gpt_trainer(video['url'], 'video')
                 except Exception as e:
                     logger.error(f"Failed to post startup video: {e}")
                     self.youtube_queue.insert(0, video)
@@ -114,10 +117,9 @@ class ContentScheduler:
             raise
 
     def _initialize_channels(self) -> None:
-        self.news_channel = self.bot.get_channel(self.news_channel_id)
-        self.youtube_channel = self.bot.get_channel(self.youtube_channel_id)
-        if not self.news_channel or not self.youtube_channel:
-            raise ValueError("One or more channels not found")
+        self.content_channel = self.bot.get_channel(self.content_channel_id)
+        if not self.content_channel:
+            raise ValueError("Content channel not found")
 
     def _start_tasks(self) -> None:
         """Start separate tasks for news and YouTube content"""
@@ -322,7 +324,7 @@ class ContentScheduler:
                         
                         await asyncio.sleep(delay)
                         
-                        if self.news_channel and self.news_queue:
+                        if self.content_channel and self.news_queue:
                             article = self.news_queue.pop(0)
                             
                             # Skip if already posted
@@ -332,10 +334,12 @@ class ContentScheduler:
                                 
                             try:
                                 # Simply post the URL
-                                message = await self.news_channel.send(article['url'])
-                                await message.add_reaction("📥")
+                                await self.content_channel.send(article['url'])
                                 self.posted_urls.add(article['url'])  # Add URL to posted set
                                 logger.info(f"Posted article: {article['url']}")
+                                
+                                # Automatically upload to GPT Trainer
+                                await self._upload_to_gpt_trainer(article['url'], 'article')
                             except Exception as e:
                                 logger.error(f"Failed to post article: {e}")
                                 # Only add back to queue if it wasn't a duplicate
@@ -377,7 +381,7 @@ class ContentScheduler:
                         
                         await asyncio.sleep(delay)
                         
-                        if self.youtube_channel and self.youtube_queue:
+                        if self.content_channel and self.youtube_queue:
                             video = self.youtube_queue.pop(0)
                             
                             # Skip if already seen
@@ -393,8 +397,7 @@ class ContentScheduler:
                                 )
                                 embed.set_image(url=video['thumbnail_url'])
                                 embed.set_footer(text=f"Posted by {video['author']}")
-                                message = await self.youtube_channel.send(embed=embed)
-                                await message.add_reaction("📥")  # Add “inbox tray” reaction
+                                message = await self.content_channel.send(embed=embed)
                                 self.seen_videos.add(video['url'])
                                 self._save_seen_videos()  # Save after successful post
                                 logger.info(f"Posted YouTube video: {video['title']}")
@@ -456,5 +459,25 @@ class ContentScheduler:
                 json.dump(list(self.seen_videos), f)
         except Exception as e:
             logger.error(f"Error saving seen videos: {e}")
+    
+    async def _upload_to_gpt_trainer(self, url: str, content_type: str) -> None:
+        """
+        Automatically upload content to GPT Trainer knowledge base.
+        
+        Args:
+            url: The URL to upload
+            content_type: Type of content ('article' or 'video')
+        """
+        try:
+            logger.info(f"Uploading {content_type} to GPT Trainer: {url}")
+            async with api_client as client:
+                result = await client.upload_data_source(url)
+                if result.get('success') or result.get('status') == 'existing':
+                    logger.info(f"✅ Successfully added {content_type} to knowledge base: {url}")
+                else:
+                    logger.warning(f"⚠️ Failed to upload {content_type}: {result.get('error', 'Unknown error')}")
+        except Exception as e:
+            logger.error(f"❌ Error uploading {content_type} to GPT Trainer: {e}")
+            # Don't raise - we don't want upload failures to stop content posting
 
     # ...rest of existing code...

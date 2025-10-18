@@ -1,13 +1,23 @@
-# DiscordBot with GPT Trainer API
+# DiscordBot with GPT Trainer API & Google Imagen 4
 
-This Discord bot integrates with the [GPT Trainer API](https://guide.gpt-trainer.com/api-key) to provide interactive conversations and generate responses based on user prompts with an uploaded knowledge base and capabilities for a multi-agent system. It allows users to chat with a virtual assistant powered by the GPT Trainer API.
+This Discord bot integrates with the [GPT Trainer API](https://guide.gpt-trainer.com/api-key) to provide interactive conversations and generate responses based on user prompts with an uploaded knowledge base and capabilities for a multi-agent system. It also features AI image generation powered by Google's Imagen 4 models.
 
 ## Features
 
-- Interact with the bot using the `/prof` command followed by a prompt (this can easily be changed in the code, by replacing wherever it says "prof" with whatever you want)
-- The bot generates a response using the GPT Trainer API based on the provided prompt and your uploaded sources.
+- **Chat Command:** Interact with the bot using the `/prof` command followed by a prompt (this can easily be changed in the code, by replacing wherever it says "prof" with whatever you want)
+- **AI Image Generation:** Generate stunning images using the `/image` command with Google's Imagen 4
+  - Three quality tiers: `--fast`, `--standard`, `--ultra`
+  - Multiple size options from 256x256 up to 4K (4096x4096)
+  - Portrait and landscape orientations
+- The bot generates responses using the GPT Trainer API based on your uploaded knowledge sources
 - Supports handling long responses by splitting them into multiple messages
 - Implements basic rate limiting to avoid excessive API requests
+- **Automated Content Scheduling** (Optional):
+  - News scraper: Automatically posts AI news articles to a designated channel
+  - YouTube monitor: Tracks AI-related YouTube channels and posts new videos
+  - **Smart Knowledge Base**: All posted content is automatically added to your GPT Trainer chatbot
+  - Makes your `/prof` command smarter with each article and video
+  - Monitors channels like AIExplained, OpenAI, DeepMind, Anthropic, and more
 
 ## Prerequisites
 
@@ -25,7 +35,15 @@ This Discord bot integrates with the [GPT Trainer API](https://guide.gpt-trainer
     1. **GPT Trainer Website:**  Visit [https://gpt-trainer.com/](https://gpt-trainer.com/) 
     2. **Account Creation:** Create an account.
     3. **Create a Chatbot:** Follow the GPT Trainer platform's instructions to create a new chatbot project.
-    4. **API Token and UUID:** Within your chatbot project settings, you should find your API token and the chatbot's unique UUID.  
+    4. **API Token and UUID:** Within your chatbot project settings, you should find your API token and the chatbot's unique UUID.
+
+* **Google API Key (for Image Generation):**
+    1. **Google AI Studio:** Visit [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+    2. **Create API Key:** Click "Create API Key" button
+    3. **Select/Create Project:** Choose an existing Google Cloud project or create a new one
+    4. **Copy Key:** Copy your API key and keep it secure
+    
+    **Note:** Google AI Studio provides free tier access to Imagen models. For production use with higher limits, you may need to enable billing on your Google Cloud project.  
 
 **Additional Notes**
 
@@ -92,15 +110,87 @@ This Discord bot integrates with the [GPT Trainer API](https://guide.gpt-trainer
 
 2. Open the `.env` file and add the following lines:
    ```
+   # Required for basic bot functionality
    DISCORD_TOKEN=your-discord-bot-token
    GPT_TRAINER_TOKEN=your-gpt-trainer-api-token
    CHATBOT_UUID=your-gpt-trainer-chatbot-uuid
+   GOOGLE_API_KEY=your-google-api-key
+   
+   # Optional: For automated content scheduling (news + YouTube videos)
+   CONTENT_CHANNEL_ID=your-discord-channel-id
+   YOUTUBE_API_KEY=your-youtube-api-key
    ```
-   Replace `your-discord-bot-token`, `your-gpt-trainer-api-token`, and `your-gpt-trainer-chatbot-uuid` with your actual tokens and UUID.
+   Replace the placeholder values with your actual tokens, IDs, and keys.
 
    *The UUID can be found in your chatbot's dashboard in the top left under your Chatbots name.*
+   *Get your Google API key from [Google AI Studio](https://aistudio.google.com/app/apikey)*
 
-### 6. Run the Bot
+3. **About Content Scheduling (Optional):**
+   - `CONTENT_CHANNEL_ID`: Discord channel **ID** where both AI news and YouTube videos will be automatically posted
+     - Right-click a Discord channel → Copy Channel ID (you need Developer Mode enabled in Discord settings)
+     - Both news articles and YouTube videos will post to this same channel
+   - `YOUTUBE_API_KEY`: Required for YouTube monitoring (get from [Google Cloud Console](https://console.cloud.google.com/))
+   - If you don't want automated content, you can skip these variables (the bot will still work for chat and image generation)
+
+4. **What Gets Posted (Pre-configured Sources):**
+   
+   **News Sources (in `scraper/news_scraper.py`):**
+   - TechCrunch
+   - VentureBeat
+   - The Verge (AI section)
+   - MIT Tech Review (AI)
+   - Wired (AI)
+   - ArXiv AI papers
+   - Substack: Professor Synapse, Gary Marcus, One Useful Thing, Prompthub, Astral Codex
+   
+   **YouTube Channels Monitored (in `scraper/content_scheduler.py`):**
+   - AIExplained
+   - OpenAI
+   - Google DeepMind
+   - Anthropic
+   - SynapticLabs
+   - GodaGo
+   - WesRoth
+   
+   *You can edit these files to add/remove sources and channels!*
+
+### 6. Test Your Configuration
+
+Before running the bot, test that everything is configured correctly:
+
+#### Configuration Tests (Recommended - Free)
+```bash
+python test_bot.py
+```
+
+This will check:
+- Environment file and required variables
+- Python package dependencies
+- Google API connectivity
+- GPT Trainer API connectivity
+- Configuration loading
+
+#### API Integration Tests (Optional - Makes Real API Calls)
+```bash
+python test_apis.py
+```
+
+**⚠️ WARNING: This makes real API calls and may incur costs!**
+
+These tests validate actual functionality:
+- GPT Trainer chat and knowledge base uploads
+- Google Imagen image generation (all 3 models)
+- Different image sizes and formats
+- Content scraping functionality
+
+The script will ask for confirmation before each test. To skip confirmations:
+```bash
+python test_apis.py --yes
+```
+
+If all configuration tests pass ✓, you're ready to run the bot!
+
+### 7. Run the Bot
 
 1. In the VS Code terminal, run the following command to start the bot:
    ```
@@ -112,6 +202,8 @@ This Discord bot integrates with the [GPT Trainer API](https://guide.gpt-trainer
 ## Hosting the Bot
 
 If you want to host the bot continuously without running it on your local machine, you can use platforms like Replit or Railway.
+
+**Recommended: Railway** - See [RAILWAY_SETUP.md](RAILWAY_SETUP.md) for a complete Railway deployment guide.
 
 ### Hosting on Replit
 
@@ -137,13 +229,24 @@ If you want to host the bot continuously without running it on your local machin
 
 3. Connect your GitHub account and select the repository containing your bot code.
 
-4. Configure the environment variables (Discord bot token, GPT Trainer API token, and chatbot UUID) in the Railway dashboard.
+4. Configure the environment variables in the Railway dashboard:
+   - `DISCORD_TOKEN`
+   - `GPT_TRAINER_TOKEN`
+   - `CHATBOT_UUID`
+   - `GOOGLE_API_KEY` (Get from [Google AI Studio](https://aistudio.google.com/app/apikey))
+   - `NEWS_CHANNEL_ID`
+   - `YOUTUBE_CHANNEL_ID`
+   - `YOUTUBE_API_KEY`
 
 5. Click on "Deploy" to deploy your bot.
 
-6. Railway will provide you with a URL where your bot is hosted and running continuously.
+6. Railway will automatically keep your bot running continuously.
+
+**Note:** Make sure to set all environment variables before deploying. Railway makes it easy - just go to the Variables tab and add each key-value pair.
 
 ## Usage
+
+### Chat Command
 
 1. Invite the bot to your Discord server using the OAuth2 URL generated in the Discord Developer Portal.
 
@@ -154,9 +257,149 @@ If you want to host the bot continuously without running it on your local machin
 
 3. The bot will generate a response based on the provided prompt and send it back to the Discord channel.
 
+### Image Generation Command
+
+Use the `/image` command to generate AI images with Google's Imagen 4:
+
+#### Basic Usage
+```
+/image a dog reading a newspaper
+```
+
+#### Model Selection (Quality Tiers)
+- `--fast` - Quick generation (default) - **Note: Uses fixed default size**
+- `--standard` - Balanced speed and quality - Supports custom sizes
+- `--ultra` - Highest quality, slower generation - Supports custom sizes
+
+```
+/image a sunset over mountains --ultra
+/image cyberpunk city at night --fast
+/image portrait of a robot --standard
+```
+
+#### Size Options (Standard and Ultra models only)
+- `--square` or `--1k` - 1024x1024 (default)
+- `--2k` or `--large` - 2048x2048 (higher resolution)
+
+**Note:** The fast model does not support custom sizes and uses a fixed default.
+
+```
+/image detailed fantasy castle --standard --2k
+/image modern architecture --ultra --large
+/image mountain landscape --landscape --ultra
+/image modern architecture --ultra --large
+/image quick concept sketch --fast
+```
+
+#### Format Options
+- `--png` - PNG format (default, best quality)
+- `--jpeg` or `--jpg` - JPEG format (smaller file size)
+
+```
+/image scenic landscape --standard --2k --jpeg
+```
+
+#### Combined Examples
+```
+# High quality 2K image in PNG (Standard model)
+/image photorealistic portrait of an owl --standard --2k --png
+
+# Ultra quality with large size
+/image detailed fantasy landscape --ultra --large --png
+
+# Fast generation (fixed size)
+/image quick character sketch --fast --jpeg
+````
+```
+
+#### With Format Flags
+- `--png` - PNG format (default, best quality)
+- `--jpeg` or `--jpg` - JPEG format (smaller file size)
+
+```
+/image scenic view --landscape --jpeg
+```
+
+#### Combined Examples
+```
+# High quality 4K image in PNG
+/image photorealistic portrait of an owl --ultra --square-xl --png
+
+# Fast 2K landscape in JPEG
+/image sunset over ocean --fast --square-large --jpeg
+
+# Standard quality portrait
+/image detailed character design --standard --portrait
+```
+
+**Note:** The image command has a 60-second cooldown per user to manage API costs.
+
+For detailed information about image generation, see [IMAGEN_MIGRATION.md](IMAGEN_MIGRATION.md).
+
+### Automated Content Scheduling (Optional Feature)
+
+If you've configured the optional content scheduling variables, the bot will automatically post content to your designated Discord channel.
+
+**What you need to set up:**
+1. Create a Discord channel (e.g., `#ai-updates`)
+2. Get the channel ID (right-click → Copy Channel ID - requires Developer Mode)
+3. Add the ID to your environment variables as `CONTENT_CHANNEL_ID`
+4. Get a YouTube API key and set it as `YOUTUBE_API_KEY`
+
+#### What Gets Posted to Your Channel
+The bot posts both news articles and YouTube videos to the **same channel**, and **automatically adds all content to your GPT Trainer knowledge base**:
+
+**News Articles** (from Pre-configured RSS Feeds):
+- **Tech News**: TechCrunch, VentureBeat, The Verge (AI), Wired (AI)
+- **Research**: MIT Tech Review (AI), ArXiv AI papers
+- **Substacks**: Professor Synapse, Gary Marcus, One Useful Thing, Prompthub, Astral Codex
+
+**YouTube Videos** (from Monitored Channels):
+- AIExplained, OpenAI, Google DeepMind, Anthropic
+- SynapticLabs, GodaGo, WesRoth
+
+**🤖 Automatic Knowledge Base Integration:**
+Every article and video posted is automatically uploaded to your GPT Trainer chatbot's knowledge base. This means:
+- Your `/prof` command becomes smarter with each post
+- The bot can answer questions about recent AI news and videos
+- No manual saving required - everything is indexed automatically
+- Your chatbot stays up-to-date with the latest AI developments
+
+**Want different sources?** Edit the source files:
+- News feeds: `scraper/news_scraper.py` → `RSS_FEEDS` dictionary
+- YouTube channels: `scraper/content_scheduler.py` → `YOUTUBE_CHANNELS` dictionary
+
+#### How to Customize Sources
+
+**Add a new RSS feed:**
+```python
+# In scraper/news_scraper.py, add to RSS_FEEDS:
+"Your Source Name": {
+    "url": "https://example.com/feed",
+    "date_format": "rfc822"
+}
+```
+
+**Add a new YouTube channel:**
+```python
+# In scraper/content_scheduler.py, add to YOUTUBE_CHANNELS:
+"Channel Name": "CHANNEL_ID_HERE"
+```
+
+To find a YouTube channel ID: Go to the channel → View Page Source → Search for "channelId"
+
 
 ## Roadmap
-1. Add ability to find and summarize shared links.
+1. ~~Add ability to find and summarize shared links~~ ✅ (Completed)
+2. ~~Integrate AI image generation~~ ✅ (Completed - Google Imagen 4)
+3. Improve image generation with style presets
+4. Add image editing capabilities
+
+## Additional Documentation
+
+- **[RAILWAY_SETUP.md](RAILWAY_SETUP.md)** - Complete guide for deploying to Railway with environment variables
+- **[IMAGEN_MIGRATION.md](IMAGEN_MIGRATION.md)** - Complete guide to Google Imagen 4 integration, setup, and troubleshooting
+- **[MIGRATION_SUMMARY.md](MIGRATION_SUMMARY.md)** - Quick reference for the OpenAI to Google Imagen migration
 
 ## Contributing
 

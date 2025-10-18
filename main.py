@@ -49,7 +49,7 @@ class DiscordBot(commands.Bot):
         super().__init__(command_prefix='/', intents=intents)
         
         self.scheduler = None
-        self.image_generator = ImageGenerator(api_key=config.OPENAI_API_KEY)
+        self.image_generator = ImageGenerator(api_key=config.GOOGLE_API_KEY)
         self.thinking_phrases = [
             "📜 *Consulting the ancient tomes...*",
             "🤔 *Pondering the mysteries of the universe...*",
@@ -75,15 +75,18 @@ class DiscordBot(commands.Bot):
         try:
             logger.info(f'Bot is ready. Logged in as {self.user.name}')
             
-            if not self.scheduler:
-                logger.info("Initializing content scheduler...")
-                self.scheduler = ContentScheduler(
-                    self, 
-                    config.NEWS_CHANNEL_ID,
-                    config.YOUTUBE_CHANNEL_ID
-                )
-                await self.scheduler.start()
-                logger.info("Content scheduler started successfully")
+            # Only initialize scheduler if content scheduling is configured
+            if config.CONTENT_CHANNEL_ID and config.YOUTUBE_API_KEY:
+                if not self.scheduler:
+                    logger.info("Initializing content scheduler...")
+                    self.scheduler = ContentScheduler(
+                        self, 
+                        config.CONTENT_CHANNEL_ID
+                    )
+                    await self.scheduler.start()
+                    logger.info("Content scheduler started successfully")
+            else:
+                logger.info("Content scheduling disabled (missing CONTENT_CHANNEL_ID or YOUTUBE_API_KEY)")
                 
         except Exception as e:
             logger.error(f"Error in on_ready: {e}", exc_info=True)
@@ -155,11 +158,11 @@ class DiscordBot(commands.Bot):
 
     @with_error_handling
     async def generate_image(self, interaction: discord.Interaction, prompt: str):
-        """Generate an image using GPT-Image-1."""
+        """Generate an image using Google's Imagen 4."""
         await interaction.response.defer()
         
         # Send initial thinking message
-        await interaction.followup.send("🎨 *Preparing to create your masterpiece...*")
+        await interaction.followup.send("🎨 *Consulting the AI art masters...*")
         
         try:
             # Parse flags and get configuration
@@ -198,15 +201,15 @@ async def prof_command(interaction: discord.Interaction, *, prompt: str):
 
 @bot.tree.command(
     name="image", 
-    description="Generate an image using GPT-Image-1"
+    description="Generate an image using Google's Imagen 4"
 )
 @commands.cooldown(1, 60, commands.BucketType.user)
 @app_commands.describe(
     prompt=(
         "What would you like me to draw?\n"
-        "Size flags: --square, --portrait, --landscape\n"
-        "Quality flags: --low, --medium, --high\n"
-        "Format flags: --png, --jpeg, --webp"
+        "Model: --fast (default, fixed size), --standard, --ultra\n"
+        "Size (Standard/Ultra only): --square or --1k (1024x1024, default), --2k or --large (2048x2048)\n"
+        "Format: --png (default), --jpeg"
     )
 )
 async def image_command(interaction: discord.Interaction, prompt: str):
