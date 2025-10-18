@@ -26,7 +26,11 @@ class ContentScheduler:
         "SynapticLabs": "UCpQ8UQIEQ47AyLx__M-NTig",
         "GodaGo": "UCrWUuwQOvfBYi0JQzigbr_g",
         "Anthropic": "UCrDwWp7EBBv4NwvScIpBDOA",
-        "WesRoth":"UCqcbQf6yw5KzRoDDcZ_wBSw"
+        "WesRoth": "UCqcbQf6yw5KzRoDDcZ_wBSw",
+        "LiamOttley": "UCui4jxDaMb53Gdh-AZUTPAg",
+        "NateHerk": "UC2ojq-nuP8ceeHqiroeKhBA",
+        "Dwarkesh": "UCZa18YV7qayTh-MRIrBhDpA",
+        "RowanCheung": "UC8LUzR34nNX8KH3Edd0un1g"
     }
     
     def __init__(self, bot, content_channel_id: int):
