@@ -21,3 +21,4 @@ markdownify>=0.11.6
 google-api-python-client==2.108.0
 beautifulsoup4>=4.12.2
 google-genai>=0.3.0
+aiosqlite>=0.19.0

@@ -9,7 +9,7 @@ from discord.ext import commands
 from discord import app_commands
 import logging
 import io
-from typing import Callable
+from typing import Callable, Optional
 from api_client import api_client
 from config import config
 from scraper.content_scheduler import ContentScheduler
@@ -17,6 +17,7 @@ from openai import OpenAI
 from scraper.content_scraper import scrape_article_content
 from functools import wraps
 from image_generator import ImageGenerator, ImageSize
+from session_manager import SessionManager
 
 # Configure logging
 logging.basicConfig(
@@ -47,8 +48,9 @@ class DiscordBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix='/', intents=intents)
-        
+
         self.scheduler = None
+        self.session_manager: Optional[SessionManager] = None
         self.image_generator = ImageGenerator(api_key=config.GOOGLE_API_KEY)
         self.thinking_phrases = [
             "📜 *Consulting the ancient tomes...*",
@@ -62,9 +64,15 @@ class DiscordBot(commands.Bot):
         ]
 
     async def setup_hook(self):
-        """Initialize bot commands and scheduler."""
+        """Initialize bot commands, session manager, and scheduler."""
         logger.info("Starting bot setup...")
         try:
+            # Initialize session manager
+            self.session_manager = SessionManager(config.SESSION_DB_PATH, api_client)
+            await self.session_manager.initialize()
+            logger.info("Session manager initialized")
+
+            # Sync command tree
             await self.tree.sync()
             logger.info("Command tree synced")
         except Exception as e:
@@ -74,20 +82,34 @@ class DiscordBot(commands.Bot):
         """Handle bot ready event and initialize scheduler."""
         try:
             logger.info(f'Bot is ready. Logged in as {self.user.name}')
-            
+
+            # Cleanup old sessions if configured
+            if self.session_manager:
+                if config.SESSION_MAX_AGE_DAYS > 0:
+                    logger.info(f"Running session cleanup (max age: {config.SESSION_MAX_AGE_DAYS} days)")
+                    removed = await self.session_manager.cleanup_old_sessions(config.SESSION_MAX_AGE_DAYS)
+                    if removed > 0:
+                        logger.info(f"Cleaned up {removed} old session(s)")
+                else:
+                    logger.info("Session auto-cleanup disabled (SESSION_MAX_AGE_DAYS=0)")
+
+                # Log session statistics
+                count = await self.session_manager.get_session_count()
+                logger.info(f"Active sessions: {count}")
+
             # Only initialize scheduler if content scheduling is configured
             if config.CONTENT_CHANNEL_ID and config.YOUTUBE_API_KEY:
                 if not self.scheduler:
                     logger.info("Initializing content scheduler...")
                     self.scheduler = ContentScheduler(
-                        self, 
+                        self,
                         config.CONTENT_CHANNEL_ID
                     )
                     await self.scheduler.start()
                     logger.info("Content scheduler started successfully")
             else:
                 logger.info("Content scheduling disabled (missing CONTENT_CHANNEL_ID or YOUTUBE_API_KEY)")
-                
+
         except Exception as e:
             logger.error(f"Error in on_ready: {e}", exc_info=True)
 
@@ -101,7 +123,7 @@ class DiscordBot(commands.Bot):
     async def prof(self, interaction: discord.Interaction, prompt: str):
         """Main chat command with simplified response handling."""
         await interaction.response.defer()
-        
+
         # Send initial thinking message
         thinking_embed = self._create_embed(
             title="Thinking...",
@@ -109,12 +131,20 @@ class DiscordBot(commands.Bot):
             color=discord.Color.blue()
         )
         bot_message = await interaction.followup.send(embed=thinking_embed)
-        
+
         try:
             # Get response from API
             async with api_client as client:
-                session_uuid = await client.create_chat_session()
-                context = await self._build_context(interaction.channel)
+                # Get or create persistent session for this user
+                user_id = str(interaction.user.id)
+                session_uuid = await self.session_manager.get_or_create_session(user_id)
+
+                # Optionally build context from OTHER users' recent messages
+                context = ""
+                if config.USE_CHANNEL_CONTEXT:
+                    context = await self._build_channel_context(interaction.channel, interaction.user)
+
+                # Get response (session maintains user's conversation history)
                 response = await client.get_response(session_uuid, prompt, context)
                 
                 # Create and send response embed
@@ -147,14 +177,35 @@ class DiscordBot(commands.Bot):
             embed.description = description
         return embed
 
-    async def _build_context(self, channel: discord.TextChannel, limit: int = 10) -> str:
-        """Build context from recent channel messages."""
+    async def _build_channel_context(
+        self,
+        channel: discord.TextChannel,
+        exclude_user: discord.User,
+        limit: int = None
+    ) -> str:
+        """Build context from recent channel messages, excluding the current user."""
+        if limit is None:
+            limit = config.CHANNEL_CONTEXT_LIMIT
+
         context = []
-        async for msg in channel.history(limit=limit):
-            if not msg.content.startswith('/') and msg.content.strip():
+        async for msg in channel.history(limit=limit * 2):  # Get more to filter
+            # Skip messages from the current user (their history is in their session)
+            # Skip bot commands
+            # Skip empty messages
+            if (msg.author.id != exclude_user.id and
+                not msg.content.startswith('/') and
+                msg.content.strip()):
                 context.append(f"{msg.author.display_name}: {msg.content}")
-        
-        return "\n".join(context)
+
+                if len(context) >= limit:
+                    break
+
+        # Reverse to chronological order (oldest first)
+        context.reverse()
+
+        if context:
+            return "Recent channel context:\n" + "\n".join(context)
+        return ""
 
     @with_error_handling
     async def generate_image(self, interaction: discord.Interaction, prompt: str):
@@ -215,6 +266,66 @@ async def prof_command(interaction: discord.Interaction, *, prompt: str):
 async def image_command(interaction: discord.Interaction, prompt: str):
     """Command handler for /image"""
     await bot.generate_image(interaction, prompt)
+
+@bot.tree.command(name="reset", description="Reset your conversation history with Professor Synapse")
+async def reset_command(interaction: discord.Interaction):
+    """Reset user's conversation history."""
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        user_id = str(interaction.user.id)
+        new_session_uuid = await bot.session_manager.reset_session(user_id)
+
+        await interaction.followup.send(
+            "🔄 **Your conversation has been reset!**\n"
+            "Starting fresh with a new session.",
+            ephemeral=True
+        )
+        logger.info(f"User {interaction.user.name} ({user_id}) reset their session")
+
+    except Exception as e:
+        logger.error(f"Error resetting session: {e}", exc_info=True)
+        await interaction.followup.send(
+            "❌ Failed to reset conversation history. Please try again later.",
+            ephemeral=True
+        )
+
+@bot.tree.command(name="sessioninfo", description="View your session statistics")
+async def sessioninfo_command(interaction: discord.Interaction):
+    """Show session information."""
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        user_id = str(interaction.user.id)
+        info = await bot.session_manager.get_session_info(user_id)
+
+        if info:
+            from datetime import datetime
+            created = datetime.fromisoformat(info['created_at'])
+            last_used = datetime.fromisoformat(info['last_used'])
+
+            embed = discord.Embed(
+                title="📊 Your Session Info",
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="Session ID", value=f"`{info['session_uuid'][:16]}...`", inline=False)
+            embed.add_field(name="Created", value=f"<t:{int(created.timestamp())}:R>", inline=True)
+            embed.add_field(name="Last Used", value=f"<t:{int(last_used.timestamp())}:R>", inline=True)
+            embed.add_field(name="Messages", value=str(info['message_count']), inline=True)
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.followup.send(
+                "You don't have an active session yet. Send a message with `/prof` to start!",
+                ephemeral=True
+            )
+
+    except Exception as e:
+        logger.error(f"Error getting session info: {e}")
+        await interaction.followup.send(
+            "❌ Failed to retrieve session info.",
+            ephemeral=True
+        )
 
 if __name__ == "__main__":
     try:

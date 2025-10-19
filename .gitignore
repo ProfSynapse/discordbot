@@ -55,6 +55,10 @@ logs/
 htmlcov/
 .tox/
 .hypothesis/
+test_sessions.db
+test_sessions.db-shm
+test_sessions.db-wal
+test_sessions_local.py
 
 # Jupyter Notebook
 .ipynb_checkpoints
