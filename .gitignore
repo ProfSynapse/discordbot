@@ -88,3 +88,5 @@ credentials/
 # Generated images (if you want to exclude cached images)
 # generated_images/
 # cache/
+
+Tests/
