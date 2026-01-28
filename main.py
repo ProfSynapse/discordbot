@@ -16,7 +16,7 @@ from scraper.content_scheduler import ContentScheduler
 from openai import OpenAI
 from scraper.content_scraper import scrape_article_content
 from functools import wraps
-from image_generator import ImageGenerator, ImageSize
+from image_generator import ImageGenerator
 from session_manager import SessionManager
 
 # Configure logging
@@ -251,23 +251,23 @@ class DiscordBot(commands.Bot):
 
     @with_error_handling
     async def generate_image(self, interaction: discord.Interaction, prompt: str):
-        """Generate an image using Google's Imagen 4."""
+        """Generate an image using Google's Nano Banana model."""
         await interaction.response.defer()
-        
+
         # Send initial thinking message
         await interaction.followup.send("🎨 *Consulting the AI art masters...*")
-        
+
         try:
             # Parse flags and get configuration
             clean_prompt, config = self.image_generator.parse_flags(prompt)
-            
+
             # Generate the image
             content_type, image_data = await self.image_generator.generate_image(clean_prompt, config)
-            
-            # Create Discord file from image data
+
+            # Create Discord file from image data (Nano Banana always returns PNG)
             file = discord.File(
                 fp=io.BytesIO(image_data),
-                filename=f"image.{config.format.value}"
+                filename="image.png"
             )
             
             # Send the result
@@ -293,16 +293,16 @@ async def prof_command(interaction: discord.Interaction, *, prompt: str):
     await bot.prof(interaction, prompt=prompt)
 
 @bot.tree.command(
-    name="image", 
-    description="Generate an image using Google's Imagen 4"
+    name="image",
+    description="Generate an image using Google's Nano Banana model"
 )
 @commands.cooldown(1, 60, commands.BucketType.user)
 @app_commands.describe(
     prompt=(
         "What would you like me to draw?\n"
-        "Model: --fast (default, fixed size), --standard, --ultra\n"
-        "Size (Standard/Ultra only): --square or --1k (1024x1024, default), --2k or --large (2048x2048)\n"
-        "Format: --png (default), --jpeg"
+        "Aspect: --square (default), --wide (16:9), --tall (9:16), "
+        "--portrait (3:4), --landscape (4:3), --ultrawide (21:9)\n"
+        "Resolution: --1k (default), --2k, --4k"
     )
 )
 async def image_command(interaction: discord.Interaction, prompt: str):
