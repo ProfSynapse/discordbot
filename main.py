@@ -8,14 +8,15 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
+import io
 from typing import Callable
 from api_client import api_client
 from config import config
 from scraper.content_scheduler import ContentScheduler
 from openai import OpenAI
-from enum import Enum
 from scraper.content_scraper import scrape_article_content
 from functools import wraps
+from image_generator import ImageGenerator, ImageSize
 
 # Configure logging
 logging.basicConfig(
@@ -39,21 +40,6 @@ def with_error_handling(func: Callable) -> Callable:
             raise
     return wrapper
 
-class ImageSize(Enum):
-    """Enum for supported image generation sizes."""
-    SQUARE = "1024x1024"
-    PORTRAIT = "1024x1792"
-    LANDSCAPE = "1792x1024"
-    
-    @classmethod
-    def get_description(cls, size: str) -> str:
-        descriptions = {
-            "square": "Perfect square (1024x1024)",
-            "portrait": "Vertical/portrait (1024x1792)",
-            "landscape": "Horizontal/landscape (1792x1024)"
-        }
-        return descriptions.get(size.lower(), "Unknown size")
-
 class DiscordBot(commands.Bot):
     """Discord bot implementation with streamlined message handling."""
     
@@ -63,7 +49,7 @@ class DiscordBot(commands.Bot):
         super().__init__(command_prefix='/', intents=intents)
         
         self.scheduler = None
-        self.openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+        self.image_generator = ImageGenerator(api_key=config.OPENAI_API_KEY)
         self.thinking_phrases = [
             "📜 *Consulting the ancient tomes...*",
             "🤔 *Pondering the mysteries of the universe...*",
@@ -210,25 +196,31 @@ class DiscordBot(commands.Bot):
         return "\n".join(context)
 
     @with_error_handling
-    async def generate_image(self, interaction: discord.Interaction, prompt: str, size: ImageSize = ImageSize.SQUARE):
-        """Generate an image using DALL-E with error handling."""
+    async def generate_image(self, interaction: discord.Interaction, prompt: str):
+        """Generate an image using GPT-Image-1."""
         await interaction.response.defer()
+        
+        # Send initial thinking message
         await interaction.followup.send("🎨 *Preparing to create your masterpiece...*")
         
         try:
-            response = self.openai_client.images.generate(
-                model="dall-e-3",
-                prompt=prompt,
-                size=size.value,
-                quality="standard",
-                n=1,
+            # Parse flags and get configuration
+            clean_prompt, config = self.image_generator.parse_flags(prompt)
+            
+            # Generate the image
+            content_type, image_data = await self.image_generator.generate_image(clean_prompt, config)
+            
+            # Create Discord file from image data
+            file = discord.File(
+                fp=io.BytesIO(image_data),
+                filename=f"image.{config.format.value}"
             )
             
-            image_url = response.data[0].url
+            # Send the result
             await interaction.followup.send(
                 f"🎨 **A masterpiece commissioned by {interaction.user.display_name}:**\n"
-                f"*{prompt}*\n\n"
-                f"[View Image]({image_url})"
+                f"*{clean_prompt}*",
+                file=file
             )
             
         except Exception as e:
@@ -248,34 +240,20 @@ async def prof_command(interaction: discord.Interaction, *, prompt: str):
 
 @bot.tree.command(
     name="image", 
-    description="Generate an image using DALL-E"
+    description="Generate an image using GPT-Image-1"
 )
 @commands.cooldown(1, 60, commands.BucketType.user)
 @app_commands.describe(
-    prompt="What would you like me to draw? (add --square, --portrait, or --wide at the end)"
+    prompt=(
+        "What would you like me to draw?\n"
+        "Size flags: --square, --portrait, --landscape\n"
+        "Quality flags: --low, --medium, --high\n"
+        "Format flags: --png, --jpeg, --webp"
+    )
 )
 async def image_command(interaction: discord.Interaction, prompt: str):
     """Command handler for /image"""
-    # Parse size from flags in prompt
-    size_map = {
-        "--square": ImageSize.SQUARE,
-        "--portrait": ImageSize.PORTRAIT,
-        "--wide": ImageSize.LANDSCAPE,
-        "--landscape": ImageSize.LANDSCAPE
-    }
-    
-    # Default to square if no flag found
-    image_size = ImageSize.SQUARE
-    clean_prompt = prompt
-    
-    # Check for size flags and remove from prompt
-    for flag, size in size_map.items():
-        if flag in prompt.lower():
-            image_size = size
-            clean_prompt = prompt.lower().replace(flag, "").strip()
-            break
-    
-    await bot.generate_image(interaction, clean_prompt, image_size)
+    await bot.generate_image(interaction, prompt)
 
 if __name__ == "__main__":
     try:
