@@ -186,7 +186,8 @@ class ImageGenerator:
         """Generate an image via the Nano Banana model.
 
         The Gemini generate_content call is synchronous within the google-genai SDK,
-        but this method is kept async so callers can await it uniformly.
+        so it is offloaded to a thread pool via asyncio.to_thread() to avoid blocking
+        the event loop.
 
         Args:
             prompt: The image description (flags already stripped).

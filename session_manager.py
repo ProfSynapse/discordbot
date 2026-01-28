@@ -5,7 +5,7 @@ Handles Discord user → GPT-Trainer session UUID mappings with Railway Volume p
 
 import aiosqlite
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List
 from pathlib import Path
 from config import config
@@ -96,7 +96,7 @@ class SessionManager:
                             UPDATE sessions
                             SET last_used = ?, message_count = message_count + 1
                             WHERE user_id = ?
-                        """, (datetime.utcnow().isoformat(), user_id))
+                        """, (datetime.now(timezone.utc).isoformat(), user_id))
                         await db.commit()
 
                         logger.debug(f"Reusing session for user {user_id}: {session_uuid[:8]}... (msg #{msg_count + 1})")
@@ -106,7 +106,7 @@ class SessionManager:
                 logger.info(f"Creating new session for user {user_id}")
                 session_uuid = await self.api_client.create_chat_session()
 
-                now = datetime.utcnow().isoformat()
+                now = datetime.now(timezone.utc).isoformat()
                 await db.execute("""
                     INSERT INTO sessions (user_id, session_uuid, created_at, last_used, message_count)
                     VALUES (?, ?, ?, ?, ?)
@@ -138,7 +138,7 @@ class SessionManager:
                 # Create new session
                 session_uuid = await self.api_client.create_chat_session()
 
-                now = datetime.utcnow().isoformat()
+                now = datetime.now(timezone.utc).isoformat()
                 await db.execute("""
                     INSERT INTO sessions (user_id, session_uuid, created_at, last_used, message_count)
                     VALUES (?, ?, ?, ?, ?)
@@ -196,7 +196,7 @@ class SessionManager:
             Number of sessions deleted
         """
         try:
-            cutoff_date = (datetime.utcnow() - timedelta(days=max_age_days)).isoformat()
+            cutoff_date = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
 
             async with aiosqlite.connect(self.db_path) as db:
                 # Count sessions to be deleted

@@ -1,0 +1,48 @@
+# .dockerignore
+# Prevents unnecessary and sensitive files from being copied into the Docker image.
+# This file is used by the COPY . . directive in the Dockerfile.
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python bytecode and caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Environment and secret files
+.env
+.env.*
+
+# Version control
+.git/
+.gitignore
+
+# IDE and editor settings
+.vscode/
+.idea/
+
+# AI tooling and documentation
+.claude/
+CLAUDE.md
+docs/
+
+# Test artifacts
+Tests/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# OS files
+.DS_Store
+Thumbs.db
