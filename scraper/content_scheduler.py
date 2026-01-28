@@ -239,6 +239,13 @@ class ContentScheduler:
                     logger.error(f"Failed to post startup video: {e}")
                     self.youtube_queue.insert(0, video)
 
+            # TODO: Remove after first deploy — one-time reset for video backfill retry
+            logger.info("One-time cleanup: clearing seen video entries for backfill retry")
+            async with aiosqlite.connect(config.SESSION_DB_PATH) as db:
+                await db.execute("DELETE FROM seen_content WHERE content_type = 'video'")
+                await db.commit()
+            self.seen_videos.clear()
+
             # Backfill all historical SynapticLabs videos into GPT Trainer
             # knowledge base. Idempotent -- already-seen videos are skipped.
             await self.backfill_youtube_videos()
