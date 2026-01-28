@@ -129,12 +129,15 @@ class DiscordBot(commands.Bot):
                 response = await client.get_response(session_uuid, prompt, context)
                 
                 # Create and send response embed
+                # Use embed description (4096 char max) for the answer instead of
+                # a field (1024 char max) to avoid silent truncation of long responses.
+                truncated_response = self._truncate_response(response, max_length=4096)
                 embed = self._create_embed(
                     title="Response",
+                    description=truncated_response,
                     color=discord.Color.green()
                 )
                 embed.add_field(name="Question", value=prompt[:1024], inline=False)
-                embed.add_field(name="Answer", value=response[:1024], inline=False)
                 embed.set_footer(text=f"Asked by {interaction.user.display_name}")
                 
                 await bot_message.edit(embed=embed)
@@ -157,6 +160,45 @@ class DiscordBot(commands.Bot):
         if description:
             embed.description = description
         return embed
+
+    @staticmethod
+    def _truncate_response(text: str, max_length: int = 4096) -> str:
+        """Truncate a response to fit within Discord's embed description limit.
+
+        Attempts to break at the last sentence boundary before the limit.
+        Falls back to a hard truncation with an ellipsis indicator if no
+        sentence boundary is found.
+
+        Args:
+            text: The full response text.
+            max_length: Maximum allowed characters (default 4096 for embed description).
+
+        Returns:
+            The original text if within limits, or a truncated version with '...' appended.
+        """
+        if len(text) <= max_length:
+            return text
+
+        # Reserve space for the truncation indicator
+        truncation_indicator = "..."
+        limit = max_length - len(truncation_indicator)
+        truncated = text[:limit]
+
+        # Try to break at the last sentence-ending punctuation (. ! ?)
+        last_sentence_end = max(
+            truncated.rfind('. '),
+            truncated.rfind('! '),
+            truncated.rfind('? '),
+            truncated.rfind('.\n'),
+            truncated.rfind('!\n'),
+            truncated.rfind('?\n'),
+        )
+
+        if last_sentence_end > limit // 2:
+            # Found a reasonable sentence boundary in the latter half of the text
+            truncated = truncated[:last_sentence_end + 1]
+
+        return truncated + truncation_indicator
 
     async def _build_context(self, channel: discord.TextChannel, limit: int = 10) -> str:
         """Build context from recent channel messages."""
