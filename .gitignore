@@ -79,14 +79,19 @@ Thumbs.db
 .DS_Store
 desktop.ini
 
+# Claude Code
+.claude/
+
 # Discord bot specific
 bot_token.txt
 tokens/
 credentials/
 *.json.backup
+seen_videos.json
 
 # Generated images (if you want to exclude cached images)
 # generated_images/
 # cache/
 
-Tests/
+# Diagnostic scripts
+test_citations.py

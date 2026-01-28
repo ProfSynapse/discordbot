@@ -228,6 +228,36 @@ class GPTTrainerAPI:
                 logger.error(f"Retry failed: {retry_error}")
                 return "I'm having trouble processing your request."
 
+    async def fetch_session_messages(self, session_uuid: str) -> list:
+        """Fetch all messages for a session, including citation data.
+
+        Used after a streaming response completes to retrieve the
+        ``cite_data_json`` field from the most recent assistant message.
+        The streaming endpoint does not include citation metadata, so this
+        separate GET call is the only way to obtain it.
+
+        Args:
+            session_uuid: The UUID of the chat session.
+
+        Returns:
+            A list of message dicts. Each dict may contain a
+            ``cite_data_json`` field with citation metadata.
+        """
+        try:
+            endpoint = f'session/{session_uuid}/messages'
+            response = await self._make_request('GET', endpoint)
+            # The API may return a list directly or wrap it in a dict.
+            # Normalize to always return a list.
+            if isinstance(response, list):
+                return response
+            if isinstance(response, dict) and 'data' in response:
+                return response['data']
+            # Fallback: wrap single dict in a list
+            return [response] if response else []
+        except Exception as e:
+            logger.error(f"Failed to fetch session messages: {e}")
+            return []
+
     async def upload_data_source(self, url: str) -> Dict[str, Any]:
         """Upload a URL to the knowledge base."""
         try:

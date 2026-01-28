@@ -26,6 +26,7 @@ from functools import wraps
 from image_generator import ImageGenerator
 from session_manager import SessionManager
 from health_check import HealthCheckServer
+from citation_handler import fetch_and_process_citations
 
 # Configure logging
 logging.basicConfig(
@@ -221,6 +222,12 @@ class DiscordBot(commands.Bot):
                             session_uuid, clean_content, context
                         )
 
+                        # Process citations: fetch cite_data_json from the
+                        # session messages and transform [X.Y] markers.
+                        response = await fetch_and_process_citations(
+                            client, session_uuid, response
+                        )
+
                         # Split into Discord-safe chunks and send as replies
                         chunks = self._split_response(response)
 
@@ -269,6 +276,12 @@ class DiscordBot(commands.Bot):
 
                 # Get response (session maintains user's conversation history)
                 response = await client.get_response(session_uuid, prompt, context)
+
+                # Process citations: fetch cite_data_json from the session
+                # messages and transform [X.Y] markers into links or strip them.
+                response = await fetch_and_process_citations(
+                    client, session_uuid, response
+                )
 
                 # Split the response into Discord-safe chunks and send as plain text
                 chunks = self._split_response(response)
