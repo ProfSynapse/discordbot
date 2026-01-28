@@ -39,7 +39,7 @@ class BotConfig:
     SESSION_DB_PATH: str = '/data/sessions.db'  # SQLite database path on Railway volume
     SESSION_MAX_AGE_DAYS: int = 0  # Auto-cleanup disabled (0 = never expire). Set to positive number to enable.
     USE_CHANNEL_CONTEXT: bool = True  # Include other users' messages as context
-    CHANNEL_CONTEXT_LIMIT: int = 5  # Number of recent messages to include
+    CHANNEL_CONTEXT_LIMIT: int = 10  # Number of recent messages to include
 
     # Optional parameters with defaults
     LOG_LEVEL: str = 'INFO'  # Logging level (INFO, DEBUG, etc.)
@@ -80,7 +80,7 @@ class BotConfig:
             SESSION_DB_PATH=os.environ.get('SESSION_DB_PATH', '/data/sessions.db'),
             SESSION_MAX_AGE_DAYS=int(os.environ.get('SESSION_MAX_AGE_DAYS', '0')),
             USE_CHANNEL_CONTEXT=os.environ.get('USE_CHANNEL_CONTEXT', 'true').lower() == 'true',
-            CHANNEL_CONTEXT_LIMIT=int(os.environ.get('CHANNEL_CONTEXT_LIMIT', '5')),
+            CHANNEL_CONTEXT_LIMIT=int(os.environ.get('CHANNEL_CONTEXT_LIMIT', '10')),
             LOG_LEVEL=os.environ.get('LOG_LEVEL', 'INFO'),
             MAX_MESSAGE_LENGTH=int(os.environ.get('MAX_MESSAGE_LENGTH', '2000')),
             MAX_HISTORY_MESSAGES=int(os.environ.get('MAX_HISTORY_MESSAGES', '100')),

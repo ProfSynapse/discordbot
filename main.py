@@ -70,6 +70,7 @@ class DiscordBot(commands.Bot):
         self.health_server: Optional[HealthCheckServer] = None
         self.session_manager: Optional[SessionManager] = None
         self.image_generator = ImageGenerator(api_key=config.GOOGLE_API_KEY)
+        self._last_bot_message_id: dict[int, int] = {}  # channel_id -> message_id
         self.thinking_phrases = [
             "📜 *Consulting the ancient tomes...*",
             "🤔 *Pondering the mysteries of the universe...*",
@@ -210,11 +211,11 @@ class DiscordBot(commands.Bot):
                         user_id = str(message.author.id)
                         session_uuid = await self.session_manager.get_or_create_session(user_id)
 
-                        # Optionally build context from OTHER users' recent messages
+                        # Optionally build context from recent channel messages
                         context = ""
                         if config.USE_CHANNEL_CONTEXT:
                             context = await self._build_channel_context(
-                                message.channel, message.author
+                                message.channel
                             )
 
                         # Get response (session maintains user's conversation history)
@@ -233,12 +234,16 @@ class DiscordBot(commands.Bot):
 
                         # First chunk is a direct reply to the user's message,
                         # creating a visible reply chain in Discord
-                        await message.reply(chunks[0])
+                        sent_message = await message.reply(chunks[0])
 
                         # Subsequent chunks are sent as plain channel messages to
                         # avoid stacking multiple reply indicators
                         for chunk in chunks[1:]:
-                            await message.channel.send(chunk)
+                            sent_message = await message.channel.send(chunk)
+
+                        # Track the bot's last response in this channel so
+                        # _build_channel_context can fetch only newer messages
+                        self._last_bot_message_id[message.channel.id] = sent_message.id
 
                 except Exception as e:
                     logger.error(
@@ -269,10 +274,10 @@ class DiscordBot(commands.Bot):
                 user_id = str(interaction.user.id)
                 session_uuid = await self.session_manager.get_or_create_session(user_id)
 
-                # Optionally build context from OTHER users' recent messages
+                # Optionally build context from recent channel messages
                 context = ""
                 if config.USE_CHANNEL_CONTEXT:
-                    context = await self._build_channel_context(interaction.channel, interaction.user)
+                    context = await self._build_channel_context(interaction.channel)
 
                 # Get response (session maintains user's conversation history)
                 response = await client.get_response(session_uuid, prompt, context)
@@ -288,10 +293,15 @@ class DiscordBot(commands.Bot):
 
                 # Edit the thinking message with the first chunk
                 await bot_message.edit(content=chunks[0])
+                last_sent = bot_message
 
                 # Send any remaining chunks as followup messages
                 for chunk in chunks[1:]:
-                    await interaction.followup.send(chunk)
+                    last_sent = await interaction.followup.send(chunk, wait=True)
+
+                # Track the bot's last response in this channel so
+                # _build_channel_context can fetch only newer messages
+                self._last_bot_message_id[interaction.channel_id] = last_sent.id
 
         except Exception as e:
             logger.error(f"Error in prof: {e}", exc_info=True)
@@ -435,33 +445,58 @@ class DiscordBot(commands.Bot):
     async def _build_channel_context(
         self,
         channel: discord.TextChannel,
-        exclude_user: discord.User,
         limit: int = None
     ) -> str:
-        """Build context from recent channel messages, excluding the current user.
+        """Build context from channel messages since the bot's last response.
 
-        Applies MAX_CONTEXT_CHARS to prevent unbounded context growth. When the
-        total accumulated text exceeds the limit, the oldest collected messages
-        are dropped first.
+        Fetches messages posted after the bot's most recent reply in this
+        channel, giving the bot awareness of everything said between its
+        invocations (all users included).  On the first invocation in a
+        channel (no tracked last-response), falls back to fetching recent
+        messages.
+
+        Results are capped at ``limit`` messages (default
+        ``config.CHANNEL_CONTEXT_LIMIT``) and ``MAX_CONTEXT_CHARS`` total
+        characters.  When the total text exceeds the character limit the
+        oldest collected messages are dropped first.
         """
         if limit is None:
             limit = config.CHANNEL_CONTEXT_LIMIT
 
-        context = []
-        async for msg in channel.history(limit=limit * 2):  # Get more to filter
-            # Skip messages from the current user (their history is in their session)
-            # Skip bot commands
-            # Skip empty messages
-            if (msg.author.id != exclude_user.id and
-                not msg.content.startswith('/') and
-                msg.content.strip()):
-                context.append(f"{msg.author.display_name}: {msg.content}")
+        last_msg_id = self._last_bot_message_id.get(channel.id)
 
+        context = []
+        if last_msg_id is not None:
+            # Fetch messages AFTER the bot's last response.  When ``after``
+            # is provided, discord.py returns messages in chronological
+            # order (oldest first) by default, so no reversal is needed.
+            async for msg in channel.history(limit=limit * 2,
+                                             after=discord.Object(id=last_msg_id)):
+                if msg.author.bot:
+                    continue
+                if msg.content.startswith('/'):
+                    continue
+                if not msg.content.strip():
+                    continue
+                context.append(f"{msg.author.display_name}: {msg.content}")
                 if len(context) >= limit:
                     break
-
-        # Reverse to chronological order (oldest first)
-        context.reverse()
+        else:
+            # First time in this channel -- fall back to recent history.
+            # channel.history without ``after`` returns newest-first, so
+            # we reverse afterwards.
+            async for msg in channel.history(limit=limit * 2):
+                if msg.author.bot:
+                    continue
+                if msg.content.startswith('/'):
+                    continue
+                if not msg.content.strip():
+                    continue
+                context.append(f"{msg.author.display_name}: {msg.content}")
+                if len(context) >= limit:
+                    break
+            # Reverse to chronological order (oldest first)
+            context.reverse()
 
         if not context:
             return ""
