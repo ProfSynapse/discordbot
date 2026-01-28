@@ -48,17 +48,7 @@ class ContentScheduler:
     """
 
     YOUTUBE_CHANNELS = {
-        "AIExplained": "UCNJ1Ymd5yFuUPtn21xtRbbw",
-        "OpenAI": "UCXZCJLdBC09xxGZ6gcdrc6A",
-        "GoogleDeepMind": "UCP7jMXSY2xbc3KCAE0MHQ-A",
         "SynapticLabs": "UCpQ8UQIEQ47AyLx__M-NTig",
-        "GodaGo": "UCrWUuwQOvfBYi0JQzigbr_g",
-        "Anthropic": "UCrDwWp7EBBv4NwvScIpBDOA",
-        "WesRoth": "UCqcbQf6yw5KzRoDDcZ_wBSw",
-        "LiamOttley": "UCui4jxDaMb53Gdh-AZUTPAg",
-        "NateHerk": "UC2ojq-nuP8ceeHqiroeKhBA",
-        "Dwarkesh": "UCZa18YV7qayTh-MRIrBhDpA",
-        "RowanCheung": "UC8LUzR34nNX8KH3Edd0un1g"
     }
 
     def __init__(self, bot, content_channel_id: int):
@@ -71,6 +61,7 @@ class ContentScheduler:
         self._schedule_task = None
         self._news_drip_task = None
         self._youtube_drip_task = None
+        self._youtube_kb_sync_task = None
         # In-memory caches backed by SQLite seen_content table
         self.seen_videos: set = set()
         self.posted_urls: set = set()
@@ -248,6 +239,10 @@ class ContentScheduler:
                     logger.error(f"Failed to post startup video: {e}")
                     self.youtube_queue.insert(0, video)
 
+            # Backfill all historical SynapticLabs videos into GPT Trainer
+            # knowledge base. Idempotent -- already-seen videos are skipped.
+            await self.backfill_youtube_videos()
+
             self._start_tasks()
             logger.info("Scheduler started successfully")
 
@@ -266,6 +261,7 @@ class ContentScheduler:
         self._schedule_task = asyncio.create_task(self._schedule_content())
         self._news_drip_task = asyncio.create_task(self._drip_news())
         self._youtube_drip_task = asyncio.create_task(self._drip_youtube())
+        self._youtube_kb_sync_task = asyncio.create_task(self._schedule_youtube_kb_sync())
         asyncio.create_task(self._monitor_tasks())
 
     async def stop(self) -> None:
@@ -273,7 +269,8 @@ class ContentScheduler:
         self.running = False
         tasks_to_cancel = [
             task for task in
-            [self._schedule_task, self._news_drip_task, self._youtube_drip_task]
+            [self._schedule_task, self._news_drip_task, self._youtube_drip_task,
+             self._youtube_kb_sync_task]
             if task is not None
         ]
         for task in tasks_to_cancel:
@@ -290,8 +287,17 @@ class ContentScheduler:
     # ------------------------------------------------------------------
 
     async def _fetch_youtube_videos(self) -> int:
-        """Fetch recent YouTube videos using YouTube Data API."""
+        """Fetch YouTube videos from the last 7 days using YouTube Data API.
+
+        Uses the `publishedAfter` parameter to look back 7 days instead of
+        relying on the 24-hour `_is_recent()` filter. This prevents videos
+        from being lost if the bot misses a fetch cycle. The `seen_videos`
+        set still prevents duplicate posts.
+        """
         youtube_count = 0
+        published_after = (
+            datetime.now(timezone.utc) - timedelta(days=7)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         try:
             for channel_name, channel_id in self.YOUTUBE_CHANNELS.items():
@@ -300,8 +306,9 @@ class ContentScheduler:
                         part="snippet",
                         channelId=channel_id,
                         order="date",
-                        maxResults=5,
-                        type="video"
+                        maxResults=25,
+                        type="video",
+                        publishedAfter=published_after
                     )
 
                     # M6 fix: use get_running_loop() instead of deprecated get_event_loop()
@@ -319,9 +326,6 @@ class ContentScheduler:
                             published = datetime.fromisoformat(
                                 item['snippet']['publishedAt'].replace('Z', '+00:00')
                             )
-
-                            if not self._is_recent(published):
-                                continue
 
                             self.youtube_queue.append({
                                 'type': 'youtube',
@@ -563,6 +567,91 @@ class ContentScheduler:
                 await asyncio.sleep(300)
 
     # ------------------------------------------------------------------
+    # YouTube knowledge base sync
+    # ------------------------------------------------------------------
+
+    async def _schedule_youtube_kb_sync(self):
+        """Periodically sync recent SynapticLabs YouTube videos to GPT Trainer knowledge base.
+
+        Runs independently from the Discord drip-feed. Every 24 hours, fetches
+        videos published in the last 7 days and uploads any unseen ones to the
+        GPT Trainer knowledge base. Videos are marked as seen but are NOT posted
+        to Discord -- this task is KB-only.
+
+        The first sync cycle runs immediately on task start; subsequent cycles
+        run every 24 hours.
+        """
+        channel_name = "SynapticLabs"
+        channel_id = self.YOUTUBE_CHANNELS.get(channel_name)
+        if not channel_id:
+            logger.warning(
+                "SynapticLabs channel not found in YOUTUBE_CHANNELS; "
+                "YouTube KB sync disabled"
+            )
+            return
+
+        while self.running:
+            try:
+                published_after = (
+                    datetime.now(timezone.utc) - timedelta(days=7)
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+                logger.info("YouTube KB sync: fetching recent SynapticLabs videos...")
+
+                request = self.youtube.search().list(
+                    part="snippet",
+                    channelId=channel_id,
+                    order="date",
+                    maxResults=25,
+                    type="video",
+                    publishedAfter=published_after
+                )
+
+                loop = asyncio.get_running_loop()
+                response = await loop.run_in_executor(None, request.execute)
+
+                synced_count = 0
+                for item in response.get("items", []):
+                    try:
+                        video_id = item["id"]["videoId"]
+                        video_url = f"https://www.youtube.com/watch?v={video_id}"
+
+                        if video_url in self.seen_videos:
+                            continue
+
+                        title = html.unescape(
+                            item["snippet"].get("title", "Unknown")
+                        )
+                        await self._upload_to_gpt_trainer(video_url, "video")
+                        await self._add_seen_content(video_url, "video")
+                        synced_count += 1
+                        logger.info(f"YouTube KB sync: uploaded '{title}'")
+
+                        # Small delay between uploads to avoid rate limiting
+                        await asyncio.sleep(1.5)
+
+                    except Exception as e:
+                        logger.error(
+                            f"YouTube KB sync: error processing video: {e}"
+                        )
+                        continue
+
+                logger.info(
+                    f"YouTube KB sync complete: {synced_count} new videos "
+                    f"uploaded to knowledge base"
+                )
+
+            except HttpError as e:
+                logger.error(f"YouTube KB sync: YouTube API error: {e}")
+            except Exception as e:
+                logger.error(
+                    f"YouTube KB sync: unexpected error: {e}", exc_info=True
+                )
+
+            # Wait 24 hours before the next sync cycle
+            await asyncio.sleep(86400)
+
+    # ------------------------------------------------------------------
     # Task monitoring
     # ------------------------------------------------------------------
 
@@ -573,7 +662,8 @@ class ContentScheduler:
                 tasks = [
                     (self._schedule_task, self._schedule_content),
                     (self._news_drip_task, self._drip_news),
-                    (self._youtube_drip_task, self._drip_youtube)
+                    (self._youtube_drip_task, self._drip_youtube),
+                    (self._youtube_kb_sync_task, self._schedule_youtube_kb_sync)
                 ]
 
                 for task, restart_func in tasks:
@@ -586,6 +676,8 @@ class ContentScheduler:
                                 self._news_drip_task = asyncio.create_task(restart_func())
                             elif task == self._youtube_drip_task:
                                 self._youtube_drip_task = asyncio.create_task(restart_func())
+                            elif task == self._youtube_kb_sync_task:
+                                self._youtube_kb_sync_task = asyncio.create_task(restart_func())
 
                 await asyncio.sleep(60)
             except Exception as e:
@@ -616,3 +708,97 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"Error uploading {content_type} to GPT Trainer: {e}")
             # Don't raise - upload failures should not stop content posting
+
+    # ------------------------------------------------------------------
+    # YouTube backfill
+    # ------------------------------------------------------------------
+
+    async def backfill_youtube_videos(self) -> None:
+        """Page through ALL SynapticLabs channel videos and upload each to GPT Trainer.
+
+        This is a knowledge-base-only operation: videos are uploaded to GPT Trainer
+        and marked as seen in the database, but are NOT posted to Discord. It is
+        idempotent -- already-seen videos are skipped.
+
+        Pagination uses the YouTube Data API `pageToken` to walk through all
+        results. A small delay between uploads avoids rate limiting.
+        """
+        channel_name = "SynapticLabs"
+        channel_id = self.YOUTUBE_CHANNELS.get(channel_name)
+        if not channel_id:
+            logger.warning("SynapticLabs channel not found in YOUTUBE_CHANNELS; skipping backfill")
+            return
+
+        logger.info("Starting YouTube backfill for SynapticLabs channel...")
+        total_uploaded = 0
+        total_skipped = 0
+        page_token = None
+
+        try:
+            while True:
+                try:
+                    request_kwargs = {
+                        "part": "snippet",
+                        "channelId": channel_id,
+                        "order": "date",
+                        "maxResults": 50,
+                        "type": "video",
+                    }
+                    if page_token:
+                        request_kwargs["pageToken"] = page_token
+
+                    request = self.youtube.search().list(**request_kwargs)
+                    loop = asyncio.get_running_loop()
+                    response = await loop.run_in_executor(None, request.execute)
+
+                except HttpError as e:
+                    logger.error(f"YouTube API error during backfill: {e}")
+                    break
+                except Exception as e:
+                    logger.error(f"Error fetching backfill page: {e}")
+                    break
+
+                items = response.get("items", [])
+                if not items:
+                    logger.info("No more videos found during backfill")
+                    break
+
+                for item in items:
+                    try:
+                        video_id = item["id"]["videoId"]
+                        video_url = f"https://www.youtube.com/watch?v={video_id}"
+
+                        if video_url in self.seen_videos:
+                            total_skipped += 1
+                            continue
+
+                        # Upload to knowledge base (no Discord post)
+                        await self._upload_to_gpt_trainer(video_url, "video")
+                        await self._add_seen_content(video_url, "video")
+                        total_uploaded += 1
+
+                        title = html.unescape(item["snippet"].get("title", "Unknown"))
+                        logger.info(
+                            f"Backfilled {total_uploaded} videos "
+                            f"(skipped {total_skipped}): {title}"
+                        )
+
+                        # Small delay to avoid rate limiting
+                        await asyncio.sleep(1.5)
+
+                    except Exception as e:
+                        logger.error(f"Error processing backfill video: {e}")
+                        continue
+
+                # Advance to next page or stop
+                page_token = response.get("nextPageToken")
+                if not page_token:
+                    break
+
+            logger.info(
+                f"YouTube backfill complete: {total_uploaded} uploaded, "
+                f"{total_skipped} already seen"
+            )
+
+        except Exception as e:
+            logger.error(f"Error in backfill_youtube_videos: {e}", exc_info=True)
