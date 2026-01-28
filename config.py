@@ -28,11 +28,19 @@ class BotConfig:
     DISCORD_TOKEN: str  # Discord bot authentication token
     GPT_TRAINER_TOKEN: str  # GPT Trainer API authentication token
     CHATBOT_UUID: str  # Unique identifier for the chatbot instance
-    NEWS_CHANNEL_ID: int  # Discord channel ID for news articles
-    OPENAI_API_KEY: str  # OpenAI API key for DALL-E
-    YOUTUBE_CHANNEL_ID: int  # Discord channel for YouTube updates
-    YOUTUBE_API_KEY: str  # YouTube API key
+    GOOGLE_API_KEY: str  # Google API key for Imagen
     
+    # Optional parameters for content scheduling
+    CONTENT_CHANNEL_ID: Optional[int] = None  # Discord channel ID for automated content (news + YouTube)
+    YOUTUBE_API_KEY: Optional[str] = None  # YouTube API key (optional)
+    OPENAI_API_KEY: Optional[str] = None  # OpenAI API key for DALL-E (deprecated)
+
+    # Session management configuration
+    SESSION_DB_PATH: str = '/data/sessions.db'  # SQLite database path on Railway volume
+    SESSION_MAX_AGE_DAYS: int = 0  # Auto-cleanup disabled (0 = never expire). Set to positive number to enable.
+    USE_CHANNEL_CONTEXT: bool = True  # Include other users' messages as context
+    CHANNEL_CONTEXT_LIMIT: int = 5  # Number of recent messages to include
+
     # Optional parameters with defaults
     LOG_LEVEL: str = 'INFO'  # Logging level (INFO, DEBUG, etc.)
     MAX_MESSAGE_LENGTH: int = 2000  # Maximum Discord message length
@@ -55,10 +63,14 @@ class BotConfig:
             DISCORD_TOKEN=os.environ['DISCORD_TOKEN'],
             GPT_TRAINER_TOKEN=os.environ['GPT_TRAINER_TOKEN'],
             CHATBOT_UUID=os.environ['CHATBOT_UUID'],
-            NEWS_CHANNEL_ID=int(os.environ['NEWS_CHANNEL_ID']),
-            OPENAI_API_KEY=os.environ['OPENAI_API_KEY'],
-            YOUTUBE_CHANNEL_ID=int(os.environ['YOUTUBE_CHANNEL_ID']),
-            YOUTUBE_API_KEY=os.environ['YOUTUBE_API_KEY'],
+            GOOGLE_API_KEY=os.environ['GOOGLE_API_KEY'],
+            CONTENT_CHANNEL_ID=int(os.environ['CONTENT_CHANNEL_ID']) if 'CONTENT_CHANNEL_ID' in os.environ else None,
+            YOUTUBE_API_KEY=os.environ.get('YOUTUBE_API_KEY'),
+            OPENAI_API_KEY=os.environ.get('OPENAI_API_KEY'),
+            SESSION_DB_PATH=os.environ.get('SESSION_DB_PATH', '/data/sessions.db'),
+            SESSION_MAX_AGE_DAYS=int(os.environ.get('SESSION_MAX_AGE_DAYS', '0')),
+            USE_CHANNEL_CONTEXT=os.environ.get('USE_CHANNEL_CONTEXT', 'true').lower() == 'true',
+            CHANNEL_CONTEXT_LIMIT=int(os.environ.get('CHANNEL_CONTEXT_LIMIT', '5')),
             LOG_LEVEL=os.environ.get('LOG_LEVEL', 'INFO'),
             MAX_MESSAGE_LENGTH=int(os.environ.get('MAX_MESSAGE_LENGTH', '2000')),
             MAX_HISTORY_MESSAGES=int(os.environ.get('MAX_HISTORY_MESSAGES', '100')),

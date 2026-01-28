@@ -60,6 +60,10 @@ RSS_FEEDS = {
     "Astral Codex": {
         "url": "https://astralcodexten.substack.com/feed",  # Fixed URL format
         "date_format": "rfc822"
+    },
+    "AI Made Simple": {
+        "url": "https://artificialintelligencemadesimple.substack.com/feed",
+        "date_format": "rfc822"
     }
 }
 
@@ -122,7 +126,8 @@ def is_substack_feed(source: str, url: str) -> bool:
         "Gary Marcus",
         "One Useful Thing",
         "Prompthub",
-        "Astral Codex"
+        "Astral Codex",
+        "AI Made Simple"
     ]
 
 # Fix the keyword error in fetch_feed function
