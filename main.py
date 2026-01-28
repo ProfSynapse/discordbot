@@ -38,6 +38,7 @@ logging.basicConfig(
     ]
 )
 logging.getLogger("aiosqlite").setLevel(logging.WARNING)
+logging.getLogger("googleapiclient").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Maximum number of characters allowed in command prompts sent to external APIs.
