@@ -9,8 +9,10 @@ Summary: Processes GPT Trainer citation data and transforms response text.
 
     This module:
     - Parses ``cite_data_json`` from the most recent assistant message
-    - For **URL-type** sources: collects unique source links and appends
-      a "Sources" footer with markdown hyperlinks
+    - For **URL-type** sources: replaces ``[X.Y]`` markers with inline
+      parenthetical markdown hyperlinks ``([title](<url>))`` right where
+      they appear in the text. Angle brackets suppress Discord embed
+      previews. Adjacent citations pointing to the same URL are deduplicated.
     - For **upload/file-type** sources: strips the ``[X.Y]`` markers from
       the response text entirely (no useful link to show the user)
     - Passes text through unchanged when no citation data is present
@@ -21,12 +23,15 @@ Used by: main.py (``/prof`` command and ``on_message`` handler)
 import json
 import logging
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Matches citation markers like [1.2], [23.4], [3.10]
+# Matches citation markers like [1.2], [23.4], [3.10].
 _CITATION_PATTERN = re.compile(r'\[(\d+(?:\.\d+)?)\]')
+
+# Maximum display length for a citation title before truncation.
+_MAX_TITLE_LENGTH = 50
 
 
 def extract_cite_data(messages: list) -> Optional[Dict]:
@@ -76,9 +81,11 @@ def process_citations(response_text: str, cite_data: Optional[Dict]) -> str:
     """Process citation markers in ``response_text`` using ``cite_data``.
 
     Behavior per source type:
-    - **url** (web sources): The ``[X.Y]`` marker is stripped from the
-      inline text and a deduplicated "Sources" footer is appended with
-      markdown links.
+    - **url** (web sources): The ``[X.Y]`` marker is replaced with an
+      inline parenthetical hyperlink ``([title](<url>))`` at the exact
+      position where the marker appears. Angle brackets suppress Discord
+      embed previews. Adjacent markers that resolve to the same URL are
+      deduplicated into a single hyperlink.
     - **upload** / **file** / anything else: The ``[X.Y]`` marker is
       simply stripped from the text. No link to show.
 
@@ -104,19 +111,14 @@ def process_citations(response_text: str, cite_data: Optional[Dict]) -> str:
         len(response_text),
     )
 
-    # Collect URL-type sources for the footer. Keyed by the link URL to
-    # deduplicate (multiple markers can reference the same web page).
-    url_sources: Dict[str, str] = {}  # url -> title
-
-    # Build a set of marker keys that should be stripped (all of them).
-    markers_to_strip: set = set()
+    # Build a lookup: marker_key -> (url, title) or None for non-URL types.
+    marker_lookup: Dict[str, Optional[Tuple[str, str]]] = {}
 
     for marker_key, source_info in cite_data.items():
         if not isinstance(source_info, dict):
             logger.debug("Skipping non-dict citation entry: %s", marker_key)
             continue
 
-        markers_to_strip.add(marker_key)
         source_type = source_info.get('type', '').lower()
         title = (
             source_info.get('title')
@@ -125,7 +127,6 @@ def process_citations(response_text: str, cite_data: Optional[Dict]) -> str:
         )
 
         if source_type == 'url':
-            # Try to find a usable link for this source.
             link = (
                 source_info.get('reference_source_link')
                 or source_info.get('url')
@@ -133,46 +134,95 @@ def process_citations(response_text: str, cite_data: Optional[Dict]) -> str:
                 or None
             )
             if link and _is_valid_url(link):
-                # Deduplicate by URL; keep the first title seen.
-                if link not in url_sources:
-                    url_sources[link] = title
+                marker_lookup[marker_key] = (link, title)
             else:
                 logger.debug(
                     "URL-type citation '%s' has no valid link; stripping marker only",
                     marker_key,
                 )
+                marker_lookup[marker_key] = None
+        else:
+            # Upload/file/other types: strip the marker, no link.
+            marker_lookup[marker_key] = None
 
-    # Strip all citation markers from the text.
-    processed = _strip_citation_markers(response_text, markers_to_strip)
-
-    # Append a "Sources" footer if we collected any URL sources.
-    if url_sources:
-        processed = _append_sources_footer(processed, url_sources)
+    processed = _replace_citation_markers(response_text, marker_lookup)
 
     return processed
 
 
-def _strip_citation_markers(text: str, marker_keys: set) -> str:
-    """Remove ``[X.Y]`` markers from *text* for keys present in *marker_keys*.
+def _replace_citation_markers(
+    text: str,
+    marker_lookup: Dict[str, Optional[Tuple[str, str]]],
+) -> str:
+    """Replace or strip ``[X.Y]`` markers in *text* based on *marker_lookup*.
 
-    Only markers whose numeric key (e.g. ``3.4``) is in ``marker_keys``
-    are removed. Markers not found in the citation data are left alone so
-    we do not accidentally destroy intentional bracketed text like ``[1]``
-    list items.
+    For markers that map to a ``(url, title)`` tuple, the marker is
+    replaced with an inline parenthetical hyperlink ``([title](<url>))``.
+    Adjacent markers that resolve to the **same URL** are collapsed
+    into a single hyperlink to avoid repetition.
 
-    After stripping, any resulting double-spaces or leading/trailing
-    whitespace around the removed marker are cleaned up.
+    For markers that map to ``None`` (upload/file types), the marker
+    is simply removed.
+
+    Markers whose key is not found in ``marker_lookup`` at all are
+    left untouched so we do not accidentally destroy intentional
+    bracketed text like ``[1]`` list items.
+
+    After processing, whitespace artefacts (double spaces, spaces
+    before punctuation) are cleaned up.
     """
-    if not marker_keys:
+    if not marker_lookup:
         return text
 
-    def _replace(match: re.Match) -> str:
-        key = match.group(1)
-        if key in marker_keys:
-            return ''
-        return match.group(0)
+    # We process the text by scanning for runs of adjacent citation
+    # markers. A "run" is one or more [X.Y] markers separated only by
+    # optional whitespace. For each run, we collect the unique URLs
+    # they resolve to and emit one hyperlink per unique URL (in order
+    # of first appearance). Markers that resolve to None (strip-only)
+    # contribute nothing to the output for that run.
 
-    result = _CITATION_PATTERN.sub(_replace, text)
+    # Pattern to match a run of one or more adjacent [X.Y] markers.
+    # Each marker is captured individually via finditer inside the
+    # replacement function.
+    _run_pattern = re.compile(
+        r'(\[\d+(?:\.\d+)?\](?:\s*\[\d+(?:\.\d+)?\])*)'
+    )
+
+    def _replace_run(match: re.Match) -> str:
+        """Replace a run of adjacent citation markers."""
+        run_text = match.group(0)
+        individual_markers = _CITATION_PATTERN.findall(run_text)
+
+        # Check if ANY marker in this run is recognized. If none are
+        # in our lookup, leave the entire run untouched (they might be
+        # intentional bracketed text).
+        has_known_marker = any(m in marker_lookup for m in individual_markers)
+        if not has_known_marker:
+            return run_text
+
+        # Collect unique (url, title) pairs in order, deduplicating by URL.
+        seen_urls: set = set()
+        hyperlinks: list = []
+
+        for key in individual_markers:
+            info = marker_lookup.get(key)
+            if info is None:
+                # Either an upload/file marker (strip) or unknown marker.
+                # Unknown markers in a run that contains known markers
+                # are stripped along with the known ones.
+                continue
+            url, title = info
+            if url not in seen_urls:
+                seen_urls.add(url)
+                hyperlinks.append(_format_hyperlink(title, url))
+
+        if hyperlinks:
+            return ' '.join(hyperlinks)
+
+        # All markers in the run were strip-only (no URLs).
+        return ''
+
+    result = _run_pattern.sub(_replace_run, text)
 
     # Clean up artefacts: collapse multiple spaces into one.
     result = re.sub(r'  +', ' ', result)
@@ -182,23 +232,31 @@ def _strip_citation_markers(text: str, marker_keys: set) -> str:
     return result.strip()
 
 
-def _append_sources_footer(text: str, url_sources: Dict[str, str]) -> str:
-    """Append a markdown "Sources" section to the response text.
+def _format_hyperlink(title: str, url: str) -> str:
+    """Format a title and URL as a Discord markdown hyperlink.
+
+    Sanitizes the title for markdown (removes brackets that would break
+    the link syntax) and truncates long titles to ``_MAX_TITLE_LENGTH``
+    characters.
 
     Args:
-        text: The (already cleaned) response text.
-        url_sources: Mapping of URL to display title.
+        title: Display text for the hyperlink.
+        url: The link target.
 
     Returns:
-        Text with appended sources footer.
+        A parenthetical markdown hyperlink string like ``([title](<url>))``.
+        The outer parentheses make it read as a natural inline reference.
+        The angle brackets around the URL suppress Discord's automatic
+        embed preview cards.
     """
-    lines = ["\n\n**Sources:**"]
-    for idx, (url, title) in enumerate(url_sources.items(), start=1):
-        # Sanitize title for markdown (remove brackets that would break links)
-        clean_title = title.replace('[', '(').replace(']', ')')
-        lines.append(f"{idx}. [{clean_title}]({url})")
+    # Sanitize brackets that would break markdown link syntax.
+    clean_title = title.replace('[', '(').replace(']', ')')
 
-    return text + '\n'.join(lines)
+    # Truncate long titles.
+    if len(clean_title) > _MAX_TITLE_LENGTH:
+        clean_title = clean_title[:_MAX_TITLE_LENGTH - 3].rstrip() + '...'
+
+    return f'([{clean_title}](<{url}>))'
 
 
 def _is_valid_url(value: str) -> bool:
