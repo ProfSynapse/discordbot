@@ -611,6 +611,7 @@ class ContentScheduler:
                 response = await loop.run_in_executor(None, request.execute)
 
                 synced_count = 0
+                failed_count = 0
                 for item in response.get("items", []):
                     try:
                         video_id = item["id"]["videoId"]
@@ -622,10 +623,17 @@ class ContentScheduler:
                         title = html.unescape(
                             item["snippet"].get("title", "Unknown")
                         )
-                        await self._upload_to_gpt_trainer(video_url, "video")
-                        await self._add_seen_content(video_url, "video")
-                        synced_count += 1
-                        logger.info(f"YouTube KB sync: uploaded '{title}'")
+                        uploaded = await self._upload_to_gpt_trainer(video_url, "video")
+                        if uploaded:
+                            await self._add_seen_content(video_url, "video")
+                            synced_count += 1
+                            logger.info(f"YouTube KB sync: uploaded '{title}'")
+                        else:
+                            failed_count += 1
+                            logger.warning(
+                                f"YouTube KB sync: upload failed for '{title}' "
+                                f"({video_url}); will retry on next sync cycle"
+                            )
 
                         # Small delay between uploads to avoid rate limiting
                         await asyncio.sleep(1.5)
@@ -638,7 +646,7 @@ class ContentScheduler:
 
                 logger.info(
                     f"YouTube KB sync complete: {synced_count} new videos "
-                    f"uploaded to knowledge base"
+                    f"uploaded to knowledge base, {failed_count} failed"
                 )
 
             except HttpError as e:
@@ -688,12 +696,16 @@ class ContentScheduler:
     # GPT Trainer upload
     # ------------------------------------------------------------------
 
-    async def _upload_to_gpt_trainer(self, url: str, content_type: str) -> None:
+    async def _upload_to_gpt_trainer(self, url: str, content_type: str) -> bool:
         """Automatically upload content to GPT Trainer knowledge base.
 
         Args:
             url: The URL to upload.
             content_type: Type of content ('article' or 'video').
+
+        Returns:
+            True if the upload succeeded or the content already exists,
+            False otherwise.
         """
         try:
             logger.info(f"Uploading {content_type} to GPT Trainer: {url}")
@@ -701,14 +713,17 @@ class ContentScheduler:
                 result = await client.upload_data_source(url)
                 if result.get('success') or result.get('status') == 'existing':
                     logger.info(f"Successfully added {content_type} to knowledge base: {url}")
+                    return True
                 else:
                     logger.warning(
                         f"Failed to upload {content_type}: {result.get('error', 'Unknown error')} "
                         f"| raw response: {result}"
                     )
+                    return False
         except Exception as e:
             logger.error(f"Error uploading {content_type} to GPT Trainer: {e}")
             # Don't raise - upload failures should not stop content posting
+            return False
 
     # ------------------------------------------------------------------
     # YouTube backfill
@@ -733,6 +748,7 @@ class ContentScheduler:
         logger.info("Starting YouTube backfill for SynapticLabs channel...")
         total_uploaded = 0
         total_skipped = 0
+        total_failed = 0
         page_token = None
 
         try:
@@ -774,15 +790,21 @@ class ContentScheduler:
                             continue
 
                         # Upload to knowledge base (no Discord post)
-                        await self._upload_to_gpt_trainer(video_url, "video")
-                        await self._add_seen_content(video_url, "video")
-                        total_uploaded += 1
-
                         title = html.unescape(item["snippet"].get("title", "Unknown"))
-                        logger.info(
-                            f"Backfilled {total_uploaded} videos "
-                            f"(skipped {total_skipped}): {title}"
-                        )
+                        uploaded = await self._upload_to_gpt_trainer(video_url, "video")
+                        if uploaded:
+                            await self._add_seen_content(video_url, "video")
+                            total_uploaded += 1
+                            logger.info(
+                                f"Backfilled {total_uploaded} videos "
+                                f"(skipped {total_skipped}): {title}"
+                            )
+                        else:
+                            total_failed += 1
+                            logger.warning(
+                                f"Backfill upload failed for '{title}' ({video_url}); "
+                                f"will retry on next backfill cycle"
+                            )
 
                         # Small delay to avoid rate limiting
                         await asyncio.sleep(1.5)
@@ -798,7 +820,7 @@ class ContentScheduler:
 
             logger.info(
                 f"YouTube backfill complete: {total_uploaded} uploaded, "
-                f"{total_skipped} already seen"
+                f"{total_skipped} already seen, {total_failed} failed"
             )
 
         except Exception as e:
