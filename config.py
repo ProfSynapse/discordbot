@@ -52,13 +52,23 @@ class BotConfig:
     def from_env(cls) -> 'BotConfig':
         """
         Create a configuration instance from environment variables.
-        
+
         Returns:
             BotConfig: Configuration instance
-            
+
         Raises:
-            KeyError: If required environment variables are missing
+            EnvironmentError: If required environment variables are missing
         """
+        # Validate all required environment variables upfront
+        required_vars = ['DISCORD_TOKEN', 'GPT_TRAINER_TOKEN', 'CHATBOT_UUID', 'GOOGLE_API_KEY']
+        missing = [var for var in required_vars if var not in os.environ]
+
+        if missing:
+            raise EnvironmentError(
+                f"Missing required environment variable(s): {', '.join(missing)}. "
+                f"Please set all of the following: {', '.join(required_vars)}"
+            )
+
         return cls(
             DISCORD_TOKEN=os.environ['DISCORD_TOKEN'],
             GPT_TRAINER_TOKEN=os.environ['GPT_TRAINER_TOKEN'],

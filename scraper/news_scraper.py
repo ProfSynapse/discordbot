@@ -10,7 +10,7 @@ from email.utils import parsedate_to_datetime
 import re
 from markdownify import markdownify as md
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+# M3 fix: removed logging.basicConfig() - only main.py should configure the root logger
 logger = logging.getLogger(__name__)
 
 # Removed SCRAPED_URLS = set()
