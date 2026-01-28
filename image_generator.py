@@ -1,178 +1,240 @@
 """
-Image generation module using Google's Imagen 4 models.
-Provides enums for configuration and a class to handle image generation with flag parsing.
+Image generation module using Google's Nano Banana model (gemini-2.5-flash-image).
+
+Location: /mnt/f/Code/discordbot/image_generator.py
+Summary: Provides enums for aspect ratio and resolution configuration, flag parsing from
+         user prompts, and async image generation via the Gemini API. Used by main.py's
+         /image slash command to produce AI-generated images in Discord.
 """
 
+import asyncio
 from enum import Enum
 from dataclasses import dataclass
 from typing import Optional, Tuple
 import logging
 from google import genai
-from google.genai.types import GenerateImagesConfig
-import io
+from google.genai import types
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-class ImageModel(Enum):
-    """Available Imagen 4 model variants."""
-    FAST = "imagen-4.0-fast-generate-001"  # Fastest generation, good quality
-    STANDARD = "imagen-4.0-generate-001"   # Balanced speed and quality
-    ULTRA = "imagen-4.0-ultra-generate-001"  # Highest quality, slower
-    
+
+class AspectRatio(Enum):
+    """
+    Available aspect ratios for Nano Banana image generation.
+
+    Each member maps to a ratio string accepted by the Gemini API and one or more
+    user-facing command flags.
+    """
+    SQUARE = "1:1"
+    PORTRAIT_2_3 = "2:3"
+    LANDSCAPE_3_2 = "3:2"
+    PORTRAIT_3_4 = "3:4"
+    LANDSCAPE_4_3 = "4:3"
+    PORTRAIT_4_5 = "4:5"
+    LANDSCAPE_5_4 = "5:4"
+    TALL = "9:16"
+    WIDE = "16:9"
+    ULTRAWIDE = "21:9"
+
     @classmethod
-    def from_flag(cls, flag: str) -> Optional['ImageModel']:
-        """Convert a command flag to ImageModel."""
+    def from_flag(cls, flag: str) -> Optional['AspectRatio']:
+        """Convert a command flag to an AspectRatio.
+
+        Args:
+            flag: A user-supplied flag string (e.g. '--wide').
+
+        Returns:
+            The matching AspectRatio member, or None if the flag is not recognised.
+        """
         flag_map = {
-            "--fast": cls.FAST,
-            "--standard": cls.STANDARD,
-            "--ultra": cls.ULTRA
+            "--square": cls.SQUARE,
+            "--1:1": cls.SQUARE,
+            "--portrait": cls.PORTRAIT_3_4,
+            "--3:4": cls.PORTRAIT_3_4,
+            "--landscape": cls.LANDSCAPE_4_3,
+            "--4:3": cls.LANDSCAPE_4_3,
+            "--tall": cls.TALL,
+            "--9:16": cls.TALL,
+            "--wide": cls.WIDE,
+            "--16:9": cls.WIDE,
+            "--ultrawide": cls.ULTRAWIDE,
+            "--21:9": cls.ULTRAWIDE,
+            "--2:3": cls.PORTRAIT_2_3,
+            "--3:2": cls.LANDSCAPE_3_2,
+            "--4:5": cls.PORTRAIT_4_5,
+            "--5:4": cls.LANDSCAPE_5_4,
         }
         return flag_map.get(flag.lower())
-    
+
     @classmethod
     def get_description(cls) -> str:
-        """Get help text for model options."""
+        """Get help text describing the available aspect ratio flags."""
         return (
-            "Model options:\n"
-            "  --fast: Quick generation (default)\n"
-            "  --standard: Balanced quality\n"
-            "  --ultra: Premium quality"
+            "Aspect ratio options:\n"
+            "  --square (default, 1:1)\n"
+            "  --wide (16:9)\n"
+            "  --tall (9:16)\n"
+            "  --portrait (3:4)\n"
+            "  --landscape (4:3)\n"
+            "  --ultrawide (21:9)\n"
+            "  Also: --2:3, --3:2, --4:5, --5:4"
         )
 
-class ImageSize(Enum):
+
+class Resolution(Enum):
     """
-    Available image sizes for Imagen 4.
-    
-    Note: Only Standard and Ultra models support size selection (1K or 2K).
-    Fast model uses a fixed default size and does not accept size parameters.
+    Available output resolutions for Nano Banana image generation.
+
+    The Gemini API accepts '1K', '2K', and '4K' as image_size values.
     """
-    SQUARE_1K = "1K"  # 1024x1024 (default)
-    SQUARE_2K = "2K"  # 2048x2048
-    
+    ONE_K = "1K"
+    TWO_K = "2K"
+    FOUR_K = "4K"
+
     @classmethod
-    def from_flag(cls, flag: str) -> Optional['ImageSize']:
-        """Convert a command flag to ImageSize."""
+    def from_flag(cls, flag: str) -> Optional['Resolution']:
+        """Convert a command flag to a Resolution.
+
+        Args:
+            flag: A user-supplied flag string (e.g. '--2k').
+
+        Returns:
+            The matching Resolution member, or None if the flag is not recognised.
+        """
         flag_map = {
-            "--square": cls.SQUARE_1K,  # Default square 1K
-            "--1k": cls.SQUARE_1K,
-            "--square-1k": cls.SQUARE_1K,
-            "--2k": cls.SQUARE_2K,
-            "--square-2k": cls.SQUARE_2K,
-            "--large": cls.SQUARE_2K,  # Alias for 2K
+            "--1k": cls.ONE_K,
+            "--2k": cls.TWO_K,
+            "--4k": cls.FOUR_K,
         }
         return flag_map.get(flag.lower())
 
     @classmethod
     def get_description(cls) -> str:
-        """Get help text for size options."""
+        """Get help text describing the available resolution flags."""
         return (
-            "Size options (Standard/Ultra models only):\n"
-            "  --square or --1k: 1024x1024 (default)\n"
-            "  --2k or --large: 2048x2048\n"
-            "Note: Fast model uses fixed default size"
+            "Resolution options:\n"
+            "  --1k (default)\n"
+            "  --2k\n"
+            "  --4k"
         )
 
-class ImageFormat(Enum):
-    """Available output formats for Imagen 4."""
-    PNG = "png"
-    JPEG = "jpeg"
-    
-    @classmethod
-    def from_flag(cls, flag: str) -> Optional['ImageFormat']:
-        """Convert a command flag to ImageFormat."""
-        flag_map = {
-            "--png": cls.PNG,
-            "--jpeg": cls.JPEG,
-            "--jpg": cls.JPEG
-        }
-        return flag_map.get(flag.lower())
 
 @dataclass
 class ImageConfig:
-    """Configuration for image generation."""
-    model: ImageModel = ImageModel.FAST  # Default to fast model
-    size: ImageSize = ImageSize.SQUARE_1K
-    format: ImageFormat = ImageFormat.PNG
+    """Configuration for a single image generation request.
+
+    Attributes:
+        aspect_ratio: The desired aspect ratio (default square 1:1).
+        resolution: The desired output resolution (default 1K).
+    """
+    aspect_ratio: AspectRatio = AspectRatio.SQUARE
+    resolution: Resolution = Resolution.ONE_K
+
 
 class ImageGenerator:
-    """Handles image generation using Google's Imagen 4 models."""
-    
+    """Handles image generation using Google's Nano Banana model (gemini-2.5-flash-image).
+
+    Usage:
+        generator = ImageGenerator(api_key="YOUR_KEY")
+        clean_prompt, config = generator.parse_flags("a cat --wide --2k")
+        content_type, image_bytes = await generator.generate_image(clean_prompt, config)
+    """
+
+    # The single model identifier for Nano Banana.
+    MODEL_ID = "gemini-2.5-flash-image"
+
     def __init__(self, api_key: str):
-        """
-        Initialize with Google API credentials.
-        
+        """Initialise the generator with a Google API key.
+
         Args:
-            api_key: Google API key for Vertex AI
+            api_key: Google API key that has access to the Gemini API.
         """
         self.client = genai.Client(api_key=api_key)
-    
+
     def parse_flags(self, prompt: str) -> Tuple[str, ImageConfig]:
-        """
-        Parse command flags from prompt and return cleaned prompt and config.
-        
+        """Parse command flags from the user prompt and return the cleaned prompt with config.
+
+        Flags are words beginning with '--'. Recognised flags are consumed into the
+        returned ImageConfig; unrecognised flags are silently stripped so they do not
+        pollute the generation prompt.
+
         Args:
-            prompt (str): Raw command input with potential flags
-            
+            prompt: Raw user input which may contain flags interspersed with the
+                    image description.
+
         Returns:
-            Tuple[str, ImageConfig]: Clean prompt and parsed configuration
+            A tuple of (cleaned_prompt, ImageConfig) where cleaned_prompt has all
+            flag tokens removed.
         """
         words = prompt.split()
         flags = [w for w in words if w.startswith("--")]
         clean_words = [w for w in words if not w.startswith("--")]
-        
+
         config = ImageConfig()
-        
+
         for flag in flags:
-            if model := ImageModel.from_flag(flag):
-                config.model = model
-            elif size := ImageSize.from_flag(flag):
-                config.size = size
-            elif format := ImageFormat.from_flag(flag):
-                config.format = format
-        
+            if aspect := AspectRatio.from_flag(flag):
+                config.aspect_ratio = aspect
+            elif resolution := Resolution.from_flag(flag):
+                config.resolution = resolution
+            # Unrecognised flags are intentionally ignored.
+
         return " ".join(clean_words), config
-    
+
     async def generate_image(self, prompt: str, config: ImageConfig) -> Tuple[str, bytes]:
-        """
-        Generate an image using Google's Imagen 4.
-        
+        """Generate an image via the Nano Banana model.
+
+        The Gemini generate_content call is synchronous within the google-genai SDK,
+        so it is offloaded to a thread pool via asyncio.to_thread() to avoid blocking
+        the event loop.
+
         Args:
-            prompt (str): Image description
-            config (ImageConfig): Generation configuration
-            
+            prompt: The image description (flags already stripped).
+            config: Generation settings (aspect ratio and resolution).
+
         Returns:
-            Tuple[str, bytes]: Content type and image data
+            A tuple of (mime_type, image_bytes). The mime_type will typically be
+            'image/png' as determined by the API.
+
+        Raises:
+            ValueError: If the API response does not contain image data.
+            Exception: Propagates any API or network errors after logging.
         """
         try:
-            # Fast model doesn't support size parameter - use defaults only
-            if config.model == ImageModel.FAST:
-                response = self.client.models.generate_images(
-                    model=config.model.value,
-                    prompt=prompt,
-                    config=GenerateImagesConfig(
-                        output_mime_type=f"image/{config.format.value}"
-                    )
-                )
-                logger.info(f"Generated image using {config.model.value} (default size)")
-            else:
-                # Standard and Ultra models support 1K or 2K sizes
-                response = self.client.models.generate_images(
-                    model=config.model.value,
-                    prompt=prompt,
-                    config=GenerateImagesConfig(
-                        image_size=config.size.value,
-                        output_mime_type=f"image/{config.format.value}"
-                    )
-                )
-                logger.info(f"Generated image using {config.model.value}, size: {config.size.value}")
-            
-            # Extract image bytes from response
-            image_data = response.generated_images[0].image.image_bytes
-            content_type = f"image/{config.format.value}"
-            
-            return content_type, image_data
-            
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=self.MODEL_ID,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_modalities=["TEXT", "IMAGE"],
+                    image_config=types.ImageConfig(
+                        aspect_ratio=config.aspect_ratio.value,
+                        image_size=config.resolution.value,
+                    ),
+                ),
+            )
+
+            logger.info(
+                "Generated image using %s, aspect_ratio=%s, resolution=%s",
+                self.MODEL_ID,
+                config.aspect_ratio.value,
+                config.resolution.value,
+            )
+
+            # Extract the first image part from the response.
+            for part in response.parts:
+                if part.inline_data is not None:
+                    content_type = part.inline_data.mime_type
+                    image_data = part.inline_data.data
+                    return content_type, image_data
+
+            # If we reach here, the response contained no image data.
+            raise ValueError(
+                "Nano Banana response did not contain image data. "
+                "The model may have refused the prompt or returned text only."
+            )
+
         except Exception as e:
-            logger.error(f"Image generation failed: {e}")
+            logger.error("Image generation failed: %s", e)
             raise

@@ -1,26 +1,54 @@
+"""
+scraper/content_scheduler.py
+
+Schedules and distributes AI-related content (YouTube videos and news articles) to a
+Discord channel on a drip-feed basis. Content is fetched twice daily (6 AM and 6 PM) and
+posted at randomized intervals to maintain a natural posting cadence.
+
+Persistence: Uses SQLite (shared with session_manager via config.SESSION_DB_PATH) to
+track previously seen videos and posted article URLs. In-memory sets are used as caches
+for fast lookups, backed by the `seen_content` table in the database.
+
+Related files:
+  - scraper/news_scraper.py: Provides scrape_all_sites() for RSS article fetching
+  - scraper/content_scraper.py: Provides article content extraction (unused here directly)
+  - config.py: Supplies SESSION_DB_PATH, YOUTUBE_API_KEY, and other settings
+  - session_manager.py: Uses the same SQLite database for session persistence
+  - api_client.py: GPT Trainer API client for uploading content to knowledge base
+"""
+
 import asyncio
 import random
 import logging
-from datetime import datetime, timedelta
+import aiosqlite
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
-from scraper.news_scraper import scrape_all_sites  # Changed from relative import
+from scraper.news_scraper import scrape_all_sites
 import re
 import discord
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from config import config  # Changed from relative import
-import html  # Add this import at the top
+from config import config
+import html
 from google.oauth2.credentials import Credentials
-import json
-import os
-from api_client import api_client  # Import the GPT Trainer API client
+from api_client import api_client
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Number of days after which old seen_content entries are purged during startup cleanup.
+_SEEN_CONTENT_MAX_AGE_DAYS = 90
+
+
 class ContentScheduler:
+    """Fetches, queues, and drip-posts YouTube videos and news articles to Discord.
+
+    Persistence is handled via a `seen_content` table in the project's shared SQLite
+    database (config.SESSION_DB_PATH). In-memory sets (`seen_videos`, `posted_urls`)
+    serve as caches; every mutation is written through to the database.
+    """
+
     YOUTUBE_CHANNELS = {
-        "AIExplained": "UCNJ1Ymd5yFuUPtn21xtRbbw", 
+        "AIExplained": "UCNJ1Ymd5yFuUPtn21xtRbbw",
         "OpenAI": "UCXZCJLdBC09xxGZ6gcdrc6A",
         "GoogleDeepMind": "UCP7jMXSY2xbc3KCAE0MHQ-A",
         "SynapticLabs": "UCpQ8UQIEQ47AyLx__M-NTig",
@@ -32,66 +60,175 @@ class ContentScheduler:
         "Dwarkesh": "UCZa18YV7qayTh-MRIrBhDpA",
         "RowanCheung": "UC8LUzR34nNX8KH3Edd0un1g"
     }
-    
+
     def __init__(self, bot, content_channel_id: int):
         self.bot = bot
         self.content_channel_id = content_channel_id
-        self.news_queue: List[Dict[str, Any]] = []  # Separate queue for news
-        self.youtube_queue: List[Dict[str, Any]] = []  # Separate queue for YouTube
-        self.articles_queue = []  # Remove this or keep for backwards compatibility
+        self.news_queue: List[Dict[str, Any]] = []
+        self.youtube_queue: List[Dict[str, Any]] = []
+        self.articles_queue = []  # Kept for backwards compatibility
         self.running = False
         self._schedule_task = None
         self._news_drip_task = None
         self._youtube_drip_task = None
-        self.seen_videos_file = 'seen_videos.json'
-        self.seen_videos = self._load_seen_videos()
-        self.content_channel = None  # Single channel for all content
-        self.scraped_urls = set()  # Moved here from news_scraper.py
+        # In-memory caches backed by SQLite seen_content table
+        self.seen_videos: set = set()
+        self.posted_urls: set = set()
+        self.content_channel = None
+        self.scraped_urls = set()
         self.youtube = build('youtube', 'v3', developerKey=config.YOUTUBE_API_KEY)
-        self.posted_urls = set()  # Add this line to track posted URLs
+        self._db_path = config.SESSION_DB_PATH
+
+    # ------------------------------------------------------------------
+    # Database helpers
+    # ------------------------------------------------------------------
+
+    async def _init_db(self) -> None:
+        """Create the seen_content table if it does not already exist.
+
+        The table lives in the same SQLite database used by session_manager
+        (config.SESSION_DB_PATH) so that all persistence is consolidated in
+        a single file on the persistent volume.
+        """
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS seen_content (
+                    url TEXT PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    first_seen TEXT NOT NULL
+                )
+            """)
+            await db.commit()
+        logger.info("seen_content table initialized")
+
+    async def _load_seen_content_from_db(self) -> None:
+        """Populate in-memory caches from the database."""
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT url, content_type FROM seen_content"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                for url, content_type in rows:
+                    if content_type == "video":
+                        self.seen_videos.add(url)
+                    elif content_type == "article":
+                        self.posted_urls.add(url)
+        logger.info(
+            f"Loaded from DB: {len(self.seen_videos)} seen videos, "
+            f"{len(self.posted_urls)} posted URLs"
+        )
+
+    async def _add_seen_content(self, url: str, content_type: str) -> None:
+        """Write a URL to both the in-memory cache and the database.
+
+        Args:
+            url: The content URL.
+            content_type: Either 'video' or 'article'.
+        """
+        # Update in-memory cache first
+        if content_type == "video":
+            self.seen_videos.add(url)
+        else:
+            self.posted_urls.add(url)
+
+        # Persist to database
+        try:
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute(
+                    """INSERT OR IGNORE INTO seen_content (url, content_type, first_seen)
+                       VALUES (?, ?, ?)""",
+                    (url, content_type, datetime.now(timezone.utc).isoformat())
+                )
+                await db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to persist seen content to DB: {e}")
+
+    async def _cleanup_old_seen_content(self) -> int:
+        """Remove seen_content entries older than _SEEN_CONTENT_MAX_AGE_DAYS.
+
+        Returns:
+            Number of rows deleted.
+        """
+        cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(days=_SEEN_CONTENT_MAX_AGE_DAYS)
+        ).isoformat()
+
+        try:
+            async with aiosqlite.connect(self._db_path) as db:
+                async with db.execute(
+                    "SELECT COUNT(*) FROM seen_content WHERE first_seen < ?",
+                    (cutoff,)
+                ) as cursor:
+                    count = (await cursor.fetchone())[0]
+
+                if count > 0:
+                    await db.execute(
+                        "DELETE FROM seen_content WHERE first_seen < ?",
+                        (cutoff,)
+                    )
+                    await db.commit()
+                    logger.info(f"Cleaned up {count} old seen_content entries (>{_SEEN_CONTENT_MAX_AGE_DAYS} days)")
+
+                return count
+        except Exception as e:
+            logger.warning(f"Error cleaning up old seen content: {e}")
+            return 0
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     async def start(self) -> None:
         """Initialize and start the content scheduler."""
         try:
             self._initialize_channels()
             self.running = True
-            
-            # Check last 100 messages in both channels
-            self.seen_videos = self._load_seen_videos()
-            
-            # Add check of recent YouTube posts
+
+            # Initialize database table and clean up stale entries (F7)
+            await self._init_db()
+            await self._cleanup_old_seen_content()
+
+            # Load persisted seen content into in-memory caches
+            await self._load_seen_content_from_db()
+
+            # M7 fix: single loop over channel history populates both caches
             async for message in self.content_channel.history(limit=100):
+                # Check embeds for YouTube video URLs
                 if message.embeds:
                     for embed in message.embeds:
                         if embed.url:
-                            self.seen_videos.add(embed.url)
-                            logger.info(f"Found existing video: {embed.url}")
-            
-            logger.info(f"Loaded {len(self.seen_videos)} previously posted videos")
-            
-            # Check last 100 messages in the channel to build initial posted_urls set
-            async for message in self.content_channel.history(limit=100):
-                urls = [word for word in message.content.split() 
-                       if word.startswith(("http://", "https://"))]
-                self.posted_urls.update(urls)
-                
-            logger.info(f"Loaded {len(self.posted_urls)} previously posted URLs")
-            
+                            if embed.url not in self.seen_videos:
+                                await self._add_seen_content(embed.url, "video")
+                                logger.info(f"Found existing video: {embed.url}")
+
+                # Check message content for plain-text URLs (articles)
+                urls = [
+                    word for word in message.content.split()
+                    if word.startswith(("http://", "https://"))
+                ]
+                for url in urls:
+                    if url not in self.posted_urls:
+                        await self._add_seen_content(url, "article")
+
+            logger.info(
+                f"After channel scan: {len(self.seen_videos)} seen videos, "
+                f"{len(self.posted_urls)} posted URLs"
+            )
+
             # Post first news article if available
             await self._fetch_content()
             if self.news_queue:
                 article = self.news_queue.pop(0)
                 try:
                     message = await self.content_channel.send(article['url'])
-                    self.posted_urls.add(article['url'])
+                    await self._add_seen_content(article['url'], "article")
                     logger.info(f"Posted startup article URL: {article['url']}")
-                    
-                    # Automatically upload to GPT Trainer
                     await self._upload_to_gpt_trainer(article['url'], 'article')
                 except Exception as e:
                     logger.error(f"Failed to post startup article: {e}")
                     self.news_queue.insert(0, article)
-            
+
             # Post first YouTube video if available
             if self.youtube_queue:
                 video = self.youtube_queue.pop(0)
@@ -104,17 +241,16 @@ class ContentScheduler:
                     embed.set_image(url=video['thumbnail_url'])
                     embed.set_footer(text=f"Posted by {video['author']}")
                     message = await self.content_channel.send(embed=embed)
+                    await self._add_seen_content(video['url'], "video")
                     logger.info(f"Posted startup YouTube video: {video['title']}")
-                    
-                    # Automatically upload to GPT Trainer
                     await self._upload_to_gpt_trainer(video['url'], 'video')
                 except Exception as e:
                     logger.error(f"Failed to post startup video: {e}")
                     self.youtube_queue.insert(0, video)
-            
+
             self._start_tasks()
             logger.info("Scheduler started successfully")
-            
+
         except Exception as e:
             logger.error(f"Error starting scheduler: {e}", exc_info=True)
             self.running = False
@@ -126,27 +262,40 @@ class ContentScheduler:
             raise ValueError("Content channel not found")
 
     def _start_tasks(self) -> None:
-        """Start separate tasks for news and YouTube content"""
+        """Start separate tasks for news and YouTube content."""
         self._schedule_task = asyncio.create_task(self._schedule_content())
         self._news_drip_task = asyncio.create_task(self._drip_news())
         self._youtube_drip_task = asyncio.create_task(self._drip_youtube())
         asyncio.create_task(self._monitor_tasks())
 
     async def stop(self) -> None:
-        self._save_seen_videos()  # Save seen videos before stopping
+        """Stop the scheduler gracefully, awaiting cancelled tasks (F8)."""
         self.running = False
-        for task in [self._schedule_task, self._news_drip_task, self._youtube_drip_task]:
-            if task:
-                task.cancel()
+        tasks_to_cancel = [
+            task for task in
+            [self._schedule_task, self._news_drip_task, self._youtube_drip_task]
+            if task is not None
+        ]
+        for task in tasks_to_cancel:
+            task.cancel()
+
+        # F8: await cancelled tasks so they can clean up properly
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+        logger.info("Scheduler stopped")
+
+    # ------------------------------------------------------------------
+    # YouTube fetching
+    # ------------------------------------------------------------------
 
     async def _fetch_youtube_videos(self) -> int:
         """Fetch recent YouTube videos using YouTube Data API."""
         youtube_count = 0
-        
+
         try:
             for channel_name, channel_id in self.YOUTUBE_CHANNELS.items():
                 try:
-                    # Create the search request
                     request = self.youtube.search().list(
                         part="snippet",
                         channelId=channel_id,
@@ -154,59 +303,59 @@ class ContentScheduler:
                         maxResults=5,
                         type="video"
                     )
-                    
-                    # Execute the request in a thread pool
-                    response = await asyncio.get_event_loop().run_in_executor(
-                        None, request.execute
-                    )
-                    
+
+                    # M6 fix: use get_running_loop() instead of deprecated get_event_loop()
+                    loop = asyncio.get_running_loop()
+                    response = await loop.run_in_executor(None, request.execute)
+
                     for item in response.get('items', []):
                         try:
                             video_id = item['id']['videoId']
                             video_url = f"https://www.youtube.com/watch?v={video_id}"
-                            
-                            # Skip if already seen
+
                             if video_url in self.seen_videos:
                                 continue
-                            
-                            # Get published time
+
                             published = datetime.fromisoformat(
                                 item['snippet']['publishedAt'].replace('Z', '+00:00')
                             )
-                            
-                            # Check if recent
+
                             if not self._is_recent(published):
                                 continue
-                            
-                            self.youtube_queue.append({  # Use youtube_queue instead of articles_queue
+
+                            self.youtube_queue.append({
                                 'type': 'youtube',
-                                'title': html.unescape(item['snippet']['title']),  # Decode HTML entities
+                                'title': html.unescape(item['snippet']['title']),
                                 'url': video_url,
                                 'author': channel_name,
                                 'thumbnail_url': item['snippet']['thumbnails']['high']['url'],
                                 'published': published.isoformat()
                             })
-                            self.seen_videos.add(video_url)
+                            await self._add_seen_content(video_url, "video")
                             youtube_count += 1
                             logger.info(f"Added video: {item['snippet']['title']}")
-                            
+
                         except Exception as e:
                             logger.error(f"Error processing video: {str(e)}")
                             continue
-                            
+
                 except HttpError as e:
                     logger.error(f"YouTube API error for channel {channel_name}: {str(e)}")
                     continue
                 except Exception as e:
                     logger.error(f"Error fetching from channel {channel_name}: {str(e)}")
                     continue
-                    
+
             logger.info(f"Successfully fetched {youtube_count} YouTube videos")
             return youtube_count
-            
+
         except Exception as e:
             logger.error(f"Error in _fetch_youtube_videos: {str(e)}", exc_info=True)
             return 0
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def _extract_video_id_from_url(self, url: str) -> Optional[str]:
         patterns = [
@@ -223,13 +372,15 @@ class ContentScheduler:
         return datetime.now(date.tzinfo) - date <= timedelta(hours=24)
 
     def _is_new_and_recent(self, article: Dict[str, Any], hours: int = 24) -> bool:
-        """Check if an article is both new (not posted) and recent.""" 
+        """Check if an article is both new (not posted) and recent."""
         try:
             published = datetime.fromisoformat(article['published'])
             recent_enough = (datetime.now(published.tzinfo) - published) <= timedelta(hours=hours)
             not_posted = article['url'] not in self.posted_urls
             return recent_enough and not_posted
-        except:
+        except Exception as e:
+            # M4 fix: catch Exception instead of bare except
+            logger.warning(f"Error checking if article is new/recent: {e}")
             return False
 
     def _create_news_embed(self, article: Dict[str, Any]) -> discord.Embed:
@@ -238,26 +389,26 @@ class ContentScheduler:
             url=article['url'],
             color=discord.Color.blue()
         )
-        
+
         if 'summary' in article:
             embed.description = self._format_summary(article['summary'])
-            
+
         source = article.get('source', 'Unknown source')
-        # Convert date to YYYY-MM-DD format
         try:
             date = datetime.fromisoformat(article.get('published', ''))
             date_str = date.strftime('%Y-%m-%d')
-        except:
+        except Exception as e:
+            # M4 fix: catch Exception instead of bare except
+            logger.warning(f"Error formatting article date: {e}")
             date_str = 'Unknown date'
-        
+
         embed.set_footer(text=f"{date_str} • {source}")
-        
         return embed
 
     def _format_summary(self, summary: str) -> str:
         if len(summary) <= 1000:
             return summary.strip()
-            
+
         last_period = summary[:1000].rfind('.')
         if last_period > 0:
             return summary[:last_period + 1] + "..."
@@ -268,45 +419,49 @@ class ContentScheduler:
             return date_str[:-6]
         return date_str
 
+    # ------------------------------------------------------------------
+    # Scheduling and drip-feed loops
+    # ------------------------------------------------------------------
+
     async def _schedule_content(self):
-        """Schedule content fetching twice daily"""
+        """Schedule content fetching twice daily (6 AM and 6 PM)."""
         while self.running:
             try:
                 now = datetime.now()
-                next_run = now.replace(hour=18 if now.hour >= 6 and now.hour < 18 else 6,
-                                     minute=0, second=0, microsecond=0)
+                next_run = now.replace(
+                    hour=18 if now.hour >= 6 and now.hour < 18 else 6,
+                    minute=0, second=0, microsecond=0
+                )
                 if next_run <= now:
                     next_run += timedelta(days=1)
-                
-                await asyncio.sleep((next_run - now).seconds)
+
+                # M11 fix: use .total_seconds() instead of .seconds to handle >24h spans
+                await asyncio.sleep(int((next_run - now).total_seconds()))
                 if self.running:
-                    await self._fetch_content()  # Changed from _fetch_all_content
+                    await self._fetch_content()
             except Exception as e:
                 logger.error(f"Error in content scheduler: {e}")
                 await asyncio.sleep(300)
 
-    async def _fetch_content(self):  # Renamed from _fetch_all_content
-        """Fetch both news articles and YouTube videos into separate queues"""
+    async def _fetch_content(self):
+        """Fetch both news articles and YouTube videos into separate queues."""
         try:
-            # Fetch news articles
             logger.info("Fetching news articles...")
             new_articles = await scrape_all_sites()
-            # Use unified filter:
             filtered_articles = [a for a in new_articles if self._is_new_and_recent(a)]
             if filtered_articles:
                 random.shuffle(filtered_articles)
                 self.news_queue.extend(filtered_articles)
                 logger.info(f"Added {len(filtered_articles)} filtered articles to news queue")
-            
-            # Fetch YouTube videos
+
             youtube_count = await self._fetch_youtube_videos()
             logger.info(f"Added {youtube_count} recent YouTube videos to YouTube queue")
-            
+
         except Exception as e:
             logger.error(f"Error during content fetch: {e}", exc_info=True)
 
     async def _drip_news(self):
-        """Distribute news articles evenly across the time window until next fetch"""
+        """Distribute news articles evenly across the time window until next fetch."""
         while self.running:
             try:
                 if self.news_queue:
@@ -317,53 +472,47 @@ class ContentScheduler:
                     )
                     if next_fetch <= now:
                         next_fetch += timedelta(days=1)
-                    
+
                     time_window = (next_fetch - now).total_seconds()
                     items_to_post = len(self.news_queue)
-                    
+
                     if items_to_post > 0:
                         base_delay = time_window / items_to_post
                         delay = random.uniform(base_delay * 0.7, base_delay * 1.3)
                         logger.info(f"News: Waiting {delay/60:.1f} minutes until next post")
-                        
+
                         await asyncio.sleep(delay)
-                        
+
                         if self.content_channel and self.news_queue:
                             article = self.news_queue.pop(0)
-                            
-                            # Skip if already posted
+
                             if article['url'] in self.posted_urls:
                                 logger.debug(f"Skipping already posted article: {article['url']}")
                                 continue
-                                
+
                             try:
-                                # Simply post the URL
                                 await self.content_channel.send(article['url'])
-                                self.posted_urls.add(article['url'])  # Add URL to posted set
+                                await self._add_seen_content(article['url'], "article")
                                 logger.info(f"Posted article: {article['url']}")
-                                
-                                # Automatically upload to GPT Trainer
                                 await self._upload_to_gpt_trainer(article['url'], 'article')
                             except Exception as e:
                                 logger.error(f"Failed to post article: {e}")
-                                # Only add back to queue if it wasn't a duplicate
                                 if article['url'] not in self.posted_urls:
                                     self.news_queue.insert(0, article)
                     else:
                         await asyncio.sleep(300)
                 else:
                     await asyncio.sleep(300)
-                    
+
             except Exception as e:
                 logger.error(f"Error in news drip: {e}")
                 await asyncio.sleep(300)
 
     async def _drip_youtube(self):
-        """Distribute YouTube videos evenly across the time window until next fetch"""
+        """Distribute YouTube videos evenly across the time window until next fetch."""
         while self.running:
             try:
                 if self.youtube_queue:
-                    # Calculate time until next fetch (roughly 12 hours)
                     now = datetime.now()
                     next_fetch = now.replace(
                         hour=18 if now.hour < 18 else 6,
@@ -371,28 +520,24 @@ class ContentScheduler:
                     )
                     if next_fetch <= now:
                         next_fetch += timedelta(days=1)
-                    
+
                     time_window = (next_fetch - now).total_seconds()
                     items_to_post = len(self.youtube_queue)
-                    
+
                     if items_to_post > 0:
-                        # Calculate average delay between posts
                         base_delay = time_window / items_to_post
-                        
-                        # Add randomness but keep within reasonable bounds
                         delay = random.uniform(base_delay * 0.7, base_delay * 1.3)
                         logger.info(f"YouTube: Waiting {delay/60:.1f} minutes until next post")
-                        
+
                         await asyncio.sleep(delay)
-                        
+
                         if self.content_channel and self.youtube_queue:
                             video = self.youtube_queue.pop(0)
-                            
-                            # Skip if already seen
+
                             if video['url'] in self.seen_videos:
                                 logger.info(f"Skipping already posted video: {video['url']}")
                                 continue
-                                
+
                             try:
                                 embed = discord.Embed(
                                     title=video['title'],
@@ -402,21 +547,24 @@ class ContentScheduler:
                                 embed.set_image(url=video['thumbnail_url'])
                                 embed.set_footer(text=f"Posted by {video['author']}")
                                 message = await self.content_channel.send(embed=embed)
-                                self.seen_videos.add(video['url'])
-                                self._save_seen_videos()  # Save after successful post
+                                await self._add_seen_content(video['url'], "video")
                                 logger.info(f"Posted YouTube video: {video['title']}")
                             except Exception as e:
                                 logger.error(f"Failed to post video: {e}")
                                 if video['url'] not in self.seen_videos:
                                     self.youtube_queue.insert(0, video)
                     else:
-                        await asyncio.sleep(300)  # Check every 5 minutes if queue empty
+                        await asyncio.sleep(300)
                 else:
                     await asyncio.sleep(300)
-                    
+
             except Exception as e:
                 logger.error(f"Error in YouTube drip: {e}")
                 await asyncio.sleep(300)
+
+    # ------------------------------------------------------------------
+    # Task monitoring
+    # ------------------------------------------------------------------
 
     async def _monitor_tasks(self):
         """Monitor all tasks for errors and restart if needed."""
@@ -427,61 +575,44 @@ class ContentScheduler:
                     (self._news_drip_task, self._drip_news),
                     (self._youtube_drip_task, self._drip_youtube)
                 ]
-                
+
                 for task, restart_func in tasks:
                     if task and task.done() and not task.cancelled():
                         if task.exception():
                             logger.error(f"Task failed: {task.exception()}")
-                            # Restart failed task
                             if task == self._schedule_task:
                                 self._schedule_task = asyncio.create_task(restart_func())
                             elif task == self._news_drip_task:
                                 self._news_drip_task = asyncio.create_task(restart_func())
                             elif task == self._youtube_drip_task:
                                 self._youtube_drip_task = asyncio.create_task(restart_func())
-                                
-                await asyncio.sleep(60)  # Check every minute
+
+                await asyncio.sleep(60)
             except Exception as e:
                 logger.error(f"Error in task monitor: {e}")
                 await asyncio.sleep(60)
 
-    def _load_seen_videos(self) -> set:
-        """Load previously seen videos from file."""
-        try:
-            if os.path.exists(self.seen_videos_file):
-                with open(self.seen_videos_file, 'r') as f:
-                    return set(json.load(f))
-            return set()
-        except Exception as e:
-            logger.error(f"Error loading seen videos: {e}")
-            return set()
+    # ------------------------------------------------------------------
+    # GPT Trainer upload
+    # ------------------------------------------------------------------
 
-    def _save_seen_videos(self) -> None:
-        """Save seen videos to file."""
-        try:
-            with open(self.seen_videos_file, 'w') as f:
-                json.dump(list(self.seen_videos), f)
-        except Exception as e:
-            logger.error(f"Error saving seen videos: {e}")
-    
     async def _upload_to_gpt_trainer(self, url: str, content_type: str) -> None:
-        """
-        Automatically upload content to GPT Trainer knowledge base.
-        
+        """Automatically upload content to GPT Trainer knowledge base.
+
         Args:
-            url: The URL to upload
-            content_type: Type of content ('article' or 'video')
+            url: The URL to upload.
+            content_type: Type of content ('article' or 'video').
         """
         try:
             logger.info(f"Uploading {content_type} to GPT Trainer: {url}")
             async with api_client as client:
                 result = await client.upload_data_source(url)
                 if result.get('success') or result.get('status') == 'existing':
-                    logger.info(f"✅ Successfully added {content_type} to knowledge base: {url}")
+                    logger.info(f"Successfully added {content_type} to knowledge base: {url}")
                 else:
-                    logger.warning(f"⚠️ Failed to upload {content_type}: {result.get('error', 'Unknown error')}")
+                    logger.warning(
+                        f"Failed to upload {content_type}: {result.get('error', 'Unknown error')}"
+                    )
         except Exception as e:
-            logger.error(f"❌ Error uploading {content_type} to GPT Trainer: {e}")
-            # Don't raise - we don't want upload failures to stop content posting
-
-    # ...rest of existing code...
+            logger.error(f"Error uploading {content_type} to GPT Trainer: {e}")
+            # Don't raise - upload failures should not stop content posting
