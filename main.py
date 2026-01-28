@@ -37,6 +37,7 @@ logging.basicConfig(
         logging.FileHandler('bot.log')
     ]
 )
+logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Maximum number of characters allowed in command prompts sent to external APIs.

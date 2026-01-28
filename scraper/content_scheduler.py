@@ -703,7 +703,8 @@ class ContentScheduler:
                     logger.info(f"Successfully added {content_type} to knowledge base: {url}")
                 else:
                     logger.warning(
-                        f"Failed to upload {content_type}: {result.get('error', 'Unknown error')}"
+                        f"Failed to upload {content_type}: {result.get('error', 'Unknown error')} "
+                        f"| raw response: {result}"
                     )
         except Exception as e:
             logger.error(f"Error uploading {content_type} to GPT Trainer: {e}")
