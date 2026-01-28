@@ -718,7 +718,7 @@ class ContentScheduler:
             logger.info(f"Uploading {content_type} to GPT Trainer: {url}")
             async with api_client as client:
                 result = await client.upload_data_source(url)
-                if result.get('success') or result.get('status') == 'existing':
+                if result.get('success') or result.get('status') in ('existing', 'await'):
                     logger.info(f"Successfully added {content_type} to knowledge base: {url}")
                     return True
                 else:
