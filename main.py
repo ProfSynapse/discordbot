@@ -23,16 +23,17 @@ from discord import app_commands
 import logging
 import io
 import random
-import re
-from typing import Callable, List, Optional
+from typing import List, Optional
 from api_client import api_client
 from config import config
 from scraper.content_scheduler import ContentScheduler
-from functools import wraps
 from image_generator import ImageGenerator
 from session_manager import SessionManager
 from health_check import HealthCheckServer
 from citation_handler import fetch_and_process_citations
+from utils.constants import MAX_PROMPT_LENGTH, MAX_CONTEXT_CHARS, THINKING_PHRASES
+from utils.decorators import with_error_handling
+from utils.text_formatting import split_response, truncate_response, create_embed
 
 # Configure logging
 logging.basicConfig(
@@ -47,25 +48,6 @@ logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 logging.getLogger("googleapiclient").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# Maximum number of characters allowed in command prompts sent to external APIs.
-MAX_PROMPT_LENGTH = 2000
-
-# Maximum total characters for channel context built from recent messages.
-MAX_CONTEXT_CHARS = 2000
-
-
-def with_error_handling(func: Callable) -> Callable:
-    """Decorator to handle errors in async functions."""
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        try:
-            return await func(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"Error in {func.__name__}: {e}", exc_info=True)
-            raise
-    return wrapper
-
-
 class DiscordBot(commands.Bot):
     """Discord bot implementation with streamlined message handling."""
 
@@ -79,16 +61,8 @@ class DiscordBot(commands.Bot):
         self.session_manager: Optional[SessionManager] = None
         self.image_generator = ImageGenerator(api_key=config.GOOGLE_API_KEY)
         self._last_bot_message_id: dict[int, int] = {}  # channel_id -> message_id
-        self.thinking_phrases = [
-            "📜 *Consulting the ancient tomes...*",
-            "🤔 *Pondering the mysteries of the universe...*",
-            "🕸️ *Focusing my neural networks...*",
-            "👵 *Channeling the wisdom of the AI elders...*",
-            "✨ *Weaving threads of knowledge...*",
-            "🔮 *Gazing into the crystal GPU...*",
-            "📚 *Speed-reading the internet...*",
-            "🤓 *Doing some quick quantum calculations...*"
-        ]
+        # Format thinking phrases with emoji and italic markdown for Discord display
+        self.thinking_phrases = [f"*{phrase}*" for phrase in THINKING_PHRASES]
 
     async def setup_hook(self):
         """Initialize bot commands, session manager, and scheduler.
@@ -238,7 +212,7 @@ class DiscordBot(commands.Bot):
                         )
 
                         # Split into Discord-safe chunks and send as replies
-                        chunks = self._split_response(response)
+                        chunks = split_response(response)
 
                         # First chunk is a direct reply to the user's message,
                         # creating a visible reply chain in Discord
@@ -297,7 +271,7 @@ class DiscordBot(commands.Bot):
                 )
 
                 # Split the response into Discord-safe chunks and send as plain text
-                chunks = self._split_response(response)
+                chunks = split_response(response)
 
                 # Edit the thinking message with the first chunk
                 await bot_message.edit(content=chunks[0])
@@ -316,139 +290,6 @@ class DiscordBot(commands.Bot):
             await bot_message.edit(
                 content="Sorry, I ran into an issue processing that. Please try again."
             )
-
-    @staticmethod
-    def _create_embed(title: str = None, description: str = None, color: discord.Color = None) -> discord.Embed:
-        """Create a Discord embed with the given parameters."""
-        embed = discord.Embed(color=color or discord.Color.default())
-        if title:
-            embed.title = title
-        if description:
-            embed.description = description
-        return embed
-
-    @staticmethod
-    def _split_response(text: str, max_length: int = 2000) -> List[str]:
-        """Split a response into chunks that fit within Discord's message limit.
-
-        Splits intelligently at natural text boundaries, trying in order:
-        1. Double newlines (paragraph boundaries)
-        2. Single newlines
-        3. Sentence boundaries ('. ', '! ', '? ')
-        4. Hard split at max_length with '...' continuation marker
-
-        Preserves markdown code blocks by avoiding splits inside them when
-        possible.
-
-        Args:
-            text: The full response text to split.
-            max_length: Maximum characters per chunk (default 2000, Discord's limit).
-
-        Returns:
-            List of strings, each within max_length.
-        """
-        if not text:
-            return [""]
-
-        if len(text) <= max_length:
-            return [text]
-
-        chunks = []
-        remaining = text
-
-        while remaining:
-            if len(remaining) <= max_length:
-                chunks.append(remaining)
-                break
-
-            # Find the best split point within max_length
-            candidate = remaining[:max_length]
-
-            # Avoid splitting inside a code block. Find all code block fences
-            # (```) in the candidate and check if we're inside an open block.
-            fence_positions = [m.start() for m in re.finditer(r'```', candidate)]
-            inside_code_block = len(fence_positions) % 2 == 1  # odd = unclosed
-
-            if inside_code_block:
-                # Try to split before the last opening fence so the code block
-                # stays intact in the next chunk.
-                last_fence = fence_positions[-1]
-                if last_fence > max_length // 4:
-                    # Only use this if the fence is reasonably far into the text
-                    # to avoid tiny chunks.
-                    candidate = remaining[:last_fence]
-
-            split_point = len(candidate)
-
-            # Strategy 1: Split on double newline (paragraph boundary)
-            para_break = candidate.rfind('\n\n')
-            if para_break > max_length // 4:
-                split_point = para_break + 2  # include the double newline
-            else:
-                # Strategy 2: Split on single newline
-                line_break = candidate.rfind('\n')
-                if line_break > max_length // 4:
-                    split_point = line_break + 1
-                else:
-                    # Strategy 3: Split on sentence boundary
-                    sentence_end = max(
-                        candidate.rfind('. '),
-                        candidate.rfind('! '),
-                        candidate.rfind('? '),
-                    )
-                    if sentence_end > max_length // 4:
-                        split_point = sentence_end + 2  # include the punctuation and space
-                    else:
-                        # Strategy 4: Hard split with continuation marker
-                        split_point = max_length - 3  # room for '...'
-                        chunks.append(remaining[:split_point] + '...')
-                        remaining = remaining[split_point:]
-                        continue
-
-            chunks.append(remaining[:split_point].rstrip())
-            remaining = remaining[split_point:].lstrip('\n')
-
-        return chunks if chunks else [""]
-
-    @staticmethod
-    def _truncate_response(text: str, max_length: int = 2000) -> str:
-        """Truncate a response to fit within Discord's message limit.
-
-        This is a safety net for cases where splitting is not appropriate
-        (e.g., embed descriptions). Attempts to break at the last sentence
-        boundary before the limit. Falls back to a hard truncation with an
-        ellipsis indicator if no sentence boundary is found.
-
-        Args:
-            text: The full response text.
-            max_length: Maximum allowed characters (default 2000 for plain messages).
-
-        Returns:
-            The original text if within limits, or a truncated version with '...' appended.
-        """
-        if len(text) <= max_length:
-            return text
-
-        # Reserve space for the truncation indicator
-        truncation_indicator = "..."
-        limit = max_length - len(truncation_indicator)
-        truncated = text[:limit]
-
-        # Try to break at the last sentence-ending punctuation (. ! ?)
-        last_sentence_end = max(
-            truncated.rfind('. '),
-            truncated.rfind('! '),
-            truncated.rfind('? '),
-            truncated.rfind('.\n'),
-            truncated.rfind('!\n'),
-            truncated.rfind('?\n'),
-        )
-
-        if last_sentence_end > limit // 2:
-            # Found a reasonable sentence boundary in the latter half of the text
-            truncated = truncated[:last_sentence_end + 1]
-
-        return truncated + truncation_indicator
 
     async def _build_channel_context(
         self,
@@ -544,6 +385,7 @@ class DiscordBot(commands.Bot):
             aspect_ratio: The aspect ratio string (e.g., "16:9").
         """
         if not config.IMAGE_GALLERY_CHANNEL_ID:
+            logger.debug("IMAGE_GALLERY_CHANNEL_ID not configured; skipping gallery post")
             return
 
         try:
@@ -678,7 +520,7 @@ def _register_commands(bot: DiscordBot) -> None:
         """Command handler for /prof"""
         # Validate prompt length before sending to external API
         if len(prompt) > MAX_PROMPT_LENGTH:
-            error_embed = DiscordBot._create_embed(
+            error_embed = create_embed(
                 title="Prompt Too Long",
                 description=(
                     f"Your prompt is {len(prompt)} characters. "
@@ -707,7 +549,7 @@ def _register_commands(bot: DiscordBot) -> None:
         """Command handler for /image"""
         # Validate prompt length before sending to external API
         if len(prompt) > MAX_PROMPT_LENGTH:
-            error_embed = DiscordBot._create_embed(
+            error_embed = create_embed(
                 title="Prompt Too Long",
                 description=(
                     f"Your prompt is {len(prompt)} characters. "
@@ -792,7 +634,7 @@ def _register_commands(bot: DiscordBot) -> None:
         so they never see 'Application did not respond'.
         """
         if isinstance(error, app_commands.CommandOnCooldown):
-            embed = DiscordBot._create_embed(
+            embed = create_embed(
                 title="Cooldown Active",
                 description=(
                     f"This command is on cooldown. "
@@ -814,7 +656,7 @@ def _register_commands(bot: DiscordBot) -> None:
             exc_info=error,
         )
 
-        error_embed = DiscordBot._create_embed(
+        error_embed = create_embed(
             title="Error",
             description="An unexpected error occurred while processing your command.",
             color=discord.Color.red()
