@@ -1,5 +1,6 @@
 # Core bot dependencies
 discord.py==2.6.4
+python-dotenv>=1.0.0
 aiohttp==3.13.3
 google-genai>=1.0.0
 google-api-python-client==2.188.0

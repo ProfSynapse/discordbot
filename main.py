@@ -11,6 +11,11 @@ Uses: api_client.py (API calls), config.py (settings), session_manager.py (sessi
       health_check.py (HTTP health endpoint for Docker/Railway).
 """
 
+# Load environment variables from .env file BEFORE any other imports
+# This must come first because config.py reads os.environ at import time
+from dotenv import load_dotenv
+load_dotenv()
+
 import asyncio
 import discord
 from discord.ext import commands
