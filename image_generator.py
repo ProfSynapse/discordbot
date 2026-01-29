@@ -86,7 +86,9 @@ class Resolution(Enum):
     """
     Available output resolutions for Nano Banana image generation.
 
-    The Gemini API accepts '1K', '2K', and '4K' as image_size values.
+    Note: The gemini-2.5-flash-image model does NOT currently support the image_size
+    parameter. This enum is retained for future use or alternative models. Resolution
+    flags are parsed but not passed to the API.
     """
     ONE_K = "1K"
     TWO_K = "2K"
@@ -126,7 +128,8 @@ class ImageConfig:
 
     Attributes:
         aspect_ratio: The desired aspect ratio (default square 1:1).
-        resolution: The desired output resolution (default 1K).
+        resolution: The desired output resolution (default 1K). Note: Currently not
+            passed to the API as gemini-2.5-flash-image does not support image_size.
     """
     aspect_ratio: AspectRatio = AspectRatio.SQUARE
     resolution: Resolution = Resolution.ONE_K
@@ -189,6 +192,10 @@ class ImageGenerator:
         so it is offloaded to a thread pool via asyncio.to_thread() to avoid blocking
         the event loop.
 
+        Note: The gemini-2.5-flash-image model only supports aspect_ratio in ImageConfig.
+        The image_size parameter is NOT supported by this model (it would cause a 400
+        INVALID_ARGUMENT error). Resolution flags are parsed but currently ignored.
+
         Args:
             prompt: The image description (flags already stripped).
             config: Generation settings (aspect ratio and resolution).
@@ -201,25 +208,32 @@ class ImageGenerator:
             ValueError: If the API response does not contain image data.
             Exception: Propagates any API or network errors after logging.
         """
+        # Note: Resolution flags are parsed but not passed to the API.
+        # gemini-2.5-flash-image does not support image_size parameter.
+        if config.resolution != Resolution.ONE_K:
+            logger.info(
+                "Resolution flag %s parsed but ignored; "
+                "gemini-2.5-flash-image does not support image_size parameter",
+                config.resolution.value,
+            )
+
         try:
             response = await asyncio.to_thread(
                 self.client.models.generate_content,
                 model=self.MODEL_ID,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    response_modalities=["TEXT", "IMAGE"],
+                    response_modalities=["IMAGE"],
                     image_config=types.ImageConfig(
                         aspect_ratio=config.aspect_ratio.value,
-                        image_size=config.resolution.value,
                     ),
                 ),
             )
 
             logger.info(
-                "Generated image using %s, aspect_ratio=%s, resolution=%s",
+                "Generated image using %s, aspect_ratio=%s",
                 self.MODEL_ID,
                 config.aspect_ratio.value,
-                config.resolution.value,
             )
 
             # Extract the first image part from the response.
