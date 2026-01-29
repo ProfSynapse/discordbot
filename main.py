@@ -2,13 +2,13 @@
 Location: /mnt/f/Code/discordbot/main.py
 Summary: Main Discord bot module that handles all Discord-specific functionality.
          This bot integrates with GPT Trainer API to provide conversational AI capabilities.
-         Defines the DiscordBot class (commands.Bot subclass), registers slash commands
-         (/prof, /image, /reset, /sessioninfo), and provides the main() entry point.
+         Defines the DiscordBot class (commands.Bot subclass) and provides the main() entry point.
 
 Used by: Executed directly as the application entry point.
 Uses: api_client.py (API calls), config.py (settings), session_manager.py (session
       persistence), image_generator.py (image generation), scraper/ (content scheduling),
-      health_check.py (HTTP health endpoint for Docker/Railway).
+      health_check.py (HTTP health endpoint for Docker/Railway), commands.py (slash commands),
+      gallery.py (image gallery posting).
 """
 
 # Load environment variables from .env file BEFORE any other imports
@@ -19,11 +19,10 @@ load_dotenv()
 import asyncio
 import discord
 from discord.ext import commands
-from discord import app_commands
 import logging
 import io
 import random
-from typing import List, Optional
+from typing import Optional
 from api_client import api_client
 from config import config
 from scraper.content_scheduler import ContentScheduler
@@ -31,9 +30,11 @@ from image_generator import ImageGenerator
 from session_manager import SessionManager
 from health_check import HealthCheckServer
 from citation_handler import fetch_and_process_citations
+from commands import register_commands
+from gallery import post_to_gallery
 from utils.constants import MAX_PROMPT_LENGTH, MAX_CONTEXT_CHARS, THINKING_PHRASES
 from utils.decorators import with_error_handling
-from utils.text_formatting import split_response, truncate_response, create_embed
+from utils.text_formatting import split_response
 
 # Configure logging
 logging.basicConfig(
@@ -47,6 +48,7 @@ logging.basicConfig(
 logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 logging.getLogger("googleapiclient").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
 
 class DiscordBot(commands.Bot):
     """Discord bot implementation with streamlined message handling."""
@@ -362,111 +364,13 @@ class DiscordBot(commands.Bot):
 
         return "Recent channel context:\n" + joined
 
-    async def _post_to_gallery(
-        self,
-        image_data: bytes,
-        prompt: str,
-        user: discord.User,
-        aspect_ratio: str
-    ) -> None:
-        """Post a generated image to the gallery forum channel.
-
-        Creates a new forum post/thread with the image attached. The thread title
-        is the prompt (truncated to 100 chars per Discord's limit), and the initial
-        message includes an embed with full details.
-
-        This is a fire-and-forget helper that logs errors but never raises them,
-        so failures do not affect the user's primary response.
-
-        Args:
-            image_data: The raw PNG image bytes.
-            prompt: The cleaned prompt used for generation.
-            user: The Discord user who requested the image.
-            aspect_ratio: The aspect ratio string (e.g., "16:9").
-        """
-        if not config.IMAGE_GALLERY_CHANNEL_ID:
-            logger.debug("IMAGE_GALLERY_CHANNEL_ID not configured; skipping gallery post")
-            return
-
-        try:
-            gallery_channel = self.get_channel(config.IMAGE_GALLERY_CHANNEL_ID)
-            if gallery_channel is None:
-                # Channel not in cache; try fetching it
-                gallery_channel = await self.fetch_channel(config.IMAGE_GALLERY_CHANNEL_ID)
-
-            if gallery_channel is None:
-                logger.warning(
-                    "Gallery channel %s not found; skipping gallery post",
-                    config.IMAGE_GALLERY_CHANNEL_ID
-                )
-                return
-
-            # Verify it's a forum channel
-            if not isinstance(gallery_channel, discord.ForumChannel):
-                logger.warning(
-                    "Gallery channel %s is not a ForumChannel (got %s); skipping gallery post",
-                    config.IMAGE_GALLERY_CHANNEL_ID,
-                    type(gallery_channel).__name__
-                )
-                return
-
-            # Create an embed for the gallery post
-            embed = discord.Embed(
-                description=f"*{prompt}*",
-                color=discord.Color.purple()
-            )
-            embed.set_image(url="attachment://gallery_image.png")
-            embed.add_field(name="Requested by", value=user.mention, inline=True)
-            embed.add_field(name="Aspect Ratio", value=aspect_ratio, inline=True)
-            embed.set_footer(text="Generated with /image command")
-
-            # Create a new file object for the gallery (can't reuse the original)
-            gallery_file = discord.File(
-                fp=io.BytesIO(image_data),
-                filename="gallery_image.png"
-            )
-
-            # Truncate prompt to 100 chars for thread title (Discord limit)
-            thread_title = prompt[:97] + "..." if len(prompt) > 100 else prompt
-
-            # Create a forum post (thread) with the image
-            await gallery_channel.create_thread(
-                name=thread_title,
-                embed=embed,
-                file=gallery_file
-            )
-            logger.info(
-                "Posted image to gallery forum %s (requested by %s)",
-                config.IMAGE_GALLERY_CHANNEL_ID,
-                user.name
-            )
-
-        except discord.Forbidden:
-            logger.warning(
-                "Bot lacks permission to post to gallery channel %s",
-                config.IMAGE_GALLERY_CHANNEL_ID
-            )
-        except discord.HTTPException as e:
-            logger.error(
-                "HTTP error posting to gallery channel %s: %s",
-                config.IMAGE_GALLERY_CHANNEL_ID,
-                e
-            )
-        except Exception as e:
-            logger.error(
-                "Unexpected error posting to gallery channel %s: %s",
-                config.IMAGE_GALLERY_CHANNEL_ID,
-                e,
-                exc_info=True
-            )
-
     @with_error_handling
     async def generate_image(self, interaction: discord.Interaction, prompt: str):
         """Generate an image using Google's Nano Banana model."""
         await interaction.response.defer()
 
         # Send initial thinking message
-        await interaction.followup.send("🎨 *Consulting the AI art masters...*")
+        await interaction.followup.send("*Consulting the AI art masters...*")
 
         try:
             # Parse flags and get configuration
@@ -484,7 +388,7 @@ class DiscordBot(commands.Bot):
 
             # Send the result
             await interaction.followup.send(
-                f"🎨 **A masterpiece commissioned by {interaction.user.display_name}:**\n"
+                f"**A masterpiece commissioned by {interaction.user.display_name}:**\n"
                 f"*{clean_prompt}*",
                 file=file
             )
@@ -492,7 +396,8 @@ class DiscordBot(commands.Bot):
             # Fire-and-forget: cross-post to gallery channel if configured
             if config.IMAGE_GALLERY_CHANNEL_ID:
                 asyncio.create_task(
-                    self._post_to_gallery(
+                    post_to_gallery(
+                        bot=self,
                         image_data=image_data,
                         prompt=clean_prompt,
                         user=interaction.user,
@@ -503,178 +408,14 @@ class DiscordBot(commands.Bot):
         except Exception as e:
             logger.error(f"Image generation error: {str(e)}")
             await interaction.followup.send(
-                "🎨 *I apologize, but I encountered an issue creating your image.*"
+                "*I apologize, but I encountered an issue creating your image.*"
             )
-
-
-def _register_commands(bot: DiscordBot) -> None:
-    """Register all slash commands on the bot's command tree.
-
-    Separated from bot construction so that module-level import does not
-    trigger side effects. Called once from main().
-    """
-
-    @bot.tree.command(name="prof", description="Chat with Professor Synapse")
-    @app_commands.checks.cooldown(1, 60)
-    async def prof_command(interaction: discord.Interaction, *, prompt: str):
-        """Command handler for /prof"""
-        # Validate prompt length before sending to external API
-        if len(prompt) > MAX_PROMPT_LENGTH:
-            error_embed = create_embed(
-                title="Prompt Too Long",
-                description=(
-                    f"Your prompt is {len(prompt)} characters. "
-                    f"Please keep it under {MAX_PROMPT_LENGTH} characters."
-                ),
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=error_embed, ephemeral=True)
-            return
-        await bot.prof(interaction, prompt=prompt)
-
-    @bot.tree.command(
-        name="image",
-        description="Generate an image using Google's Nano Banana model"
-    )
-    @app_commands.checks.cooldown(1, 60)
-    @app_commands.describe(
-        prompt=(
-            "What would you like me to draw?\n"
-            "Aspect: --square (default), --wide (16:9), --tall (9:16), "
-            "--portrait (3:4), --landscape (4:3), --ultrawide (21:9)\n"
-            "Resolution: --1k (default), --2k, --4k"
-        )
-    )
-    async def image_command(interaction: discord.Interaction, prompt: str):
-        """Command handler for /image"""
-        # Validate prompt length before sending to external API
-        if len(prompt) > MAX_PROMPT_LENGTH:
-            error_embed = create_embed(
-                title="Prompt Too Long",
-                description=(
-                    f"Your prompt is {len(prompt)} characters. "
-                    f"Please keep it under {MAX_PROMPT_LENGTH} characters."
-                ),
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=error_embed, ephemeral=True)
-            return
-        await bot.generate_image(interaction, prompt)
-
-    @bot.tree.command(name="reset", description="Reset your conversation history with Professor Synapse")
-    async def reset_command(interaction: discord.Interaction):
-        """Reset user's conversation history."""
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            user_id = str(interaction.user.id)
-            new_session_uuid = await bot.session_manager.reset_session(user_id)
-
-            await interaction.followup.send(
-                "🔄 **Your conversation has been reset!**\n"
-                "Starting fresh with a new session.",
-                ephemeral=True
-            )
-            logger.info(f"User {interaction.user.name} ({user_id}) reset their session")
-
-        except Exception as e:
-            logger.error(f"Error resetting session: {e}", exc_info=True)
-            await interaction.followup.send(
-                "❌ Failed to reset conversation history. Please try again later.",
-                ephemeral=True
-            )
-
-    @bot.tree.command(name="sessioninfo", description="View your session statistics")
-    async def sessioninfo_command(interaction: discord.Interaction):
-        """Show session information."""
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            user_id = str(interaction.user.id)
-            info = await bot.session_manager.get_session_info(user_id)
-
-            if info:
-                from datetime import datetime
-                created = datetime.fromisoformat(info['created_at'])
-                last_used = datetime.fromisoformat(info['last_used'])
-
-                embed = discord.Embed(
-                    title="📊 Your Session Info",
-                    color=discord.Color.blue()
-                )
-                embed.add_field(name="Session ID", value=f"`{info['session_uuid'][:16]}...`", inline=False)
-                embed.add_field(name="Created", value=f"<t:{int(created.timestamp())}:R>", inline=True)
-                embed.add_field(name="Last Used", value=f"<t:{int(last_used.timestamp())}:R>", inline=True)
-                embed.add_field(name="Messages", value=str(info['message_count']), inline=True)
-
-                await interaction.followup.send(embed=embed, ephemeral=True)
-            else:
-                await interaction.followup.send(
-                    "You don't have an active session yet. Send a message with `/prof` to start!",
-                    ephemeral=True
-                )
-
-        except Exception as e:
-            logger.error(f"Error getting session info: {e}")
-            await interaction.followup.send(
-                "❌ Failed to retrieve session info.",
-                ephemeral=True
-            )
-
-    # Global slash command error handler
-    @bot.tree.error
-    async def on_app_command_error(
-        interaction: discord.Interaction,
-        error: app_commands.AppCommandError
-    ):
-        """Handle errors raised by slash commands.
-
-        Catches cooldown errors with a user-friendly wait message. All other
-        unhandled errors are logged and the user receives a generic error embed
-        so they never see 'Application did not respond'.
-        """
-        if isinstance(error, app_commands.CommandOnCooldown):
-            embed = create_embed(
-                title="Cooldown Active",
-                description=(
-                    f"This command is on cooldown. "
-                    f"Please try again in **{error.retry_after:.0f}** seconds."
-                ),
-                color=discord.Color.orange()
-            )
-            if interaction.response.is_done():
-                await interaction.followup.send(embed=embed, ephemeral=True)
-            else:
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        # Log unexpected errors
-        logger.error(
-            "Unhandled error in command '%s': %s",
-            interaction.command.name if interaction.command else "unknown",
-            error,
-            exc_info=error,
-        )
-
-        error_embed = create_embed(
-            title="Error",
-            description="An unexpected error occurred while processing your command.",
-            color=discord.Color.red()
-        )
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(embed=error_embed, ephemeral=True)
-            else:
-                await interaction.response.send_message(embed=error_embed, ephemeral=True)
-        except discord.HTTPException:
-            # If even the error message fails to send, just log it
-            logger.error("Failed to send error response to user")
 
 
 def main():
     """Application entry point. Creates the bot, registers commands, and starts the event loop."""
     bot = DiscordBot()
-    _register_commands(bot)
+    register_commands(bot)
     bot.run(config.DISCORD_TOKEN)
 
 
