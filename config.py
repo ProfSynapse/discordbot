@@ -34,6 +34,7 @@ class BotConfig:
     CONTENT_CHANNEL_ID: Optional[int] = None  # Discord channel ID for automated content (news + YouTube)
     YOUTUBE_API_KEY: Optional[str] = None  # YouTube API key (optional)
     OPENAI_API_KEY: Optional[str] = None  # OpenAI API key for DALL-E (deprecated)
+    IMAGE_GALLERY_CHANNEL_ID: Optional[int] = None  # Discord channel ID for cross-posting generated images
 
     # Session management configuration
     SESSION_DB_PATH: str = '/data/sessions.db'  # SQLite database path on Railway volume
@@ -77,6 +78,7 @@ class BotConfig:
             CONTENT_CHANNEL_ID=int(os.environ['CONTENT_CHANNEL_ID']) if 'CONTENT_CHANNEL_ID' in os.environ else None,
             YOUTUBE_API_KEY=os.environ.get('YOUTUBE_API_KEY'),
             OPENAI_API_KEY=os.environ.get('OPENAI_API_KEY'),
+            IMAGE_GALLERY_CHANNEL_ID=int(os.environ['IMAGE_GALLERY_CHANNEL_ID']) if 'IMAGE_GALLERY_CHANNEL_ID' in os.environ else None,
             SESSION_DB_PATH=os.environ.get('SESSION_DB_PATH', '/data/sessions.db'),
             SESSION_MAX_AGE_DAYS=int(os.environ.get('SESSION_MAX_AGE_DAYS', '0')),
             USE_CHANNEL_CONTEXT=os.environ.get('USE_CHANNEL_CONTEXT', 'true').lower() == 'true',
