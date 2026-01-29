@@ -95,3 +95,6 @@ seen_videos.json
 
 # Diagnostic scripts
 test_citations.py
+
+.history/
+tests/
