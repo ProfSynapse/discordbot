@@ -89,6 +89,9 @@ credentials/
 *.json.backup
 seen_videos.json
 
+# Conversation memory data (may contain PII)
+data/conversations/**/*.jsonl
+
 # Generated images (if you want to exclude cached images)
 # generated_images/
 # cache/

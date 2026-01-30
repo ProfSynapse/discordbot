@@ -267,6 +267,53 @@ class GPTTrainerAPI:
             logger.error(f"Failed to upload URL: {e}")
             return {'success': False, 'error': str(e)}
 
+    async def upload_text(self, content: str, filename: str = "content.md") -> Dict[str, Any]:
+        """Upload text content to the knowledge base.
+
+        Uploads text content (e.g., markdown) directly to GPT Trainer's
+        knowledge base for RAG retrieval. Used by the memory pipeline to
+        upload conversation chunks.
+
+        Args:
+            content: The text content to upload.
+            filename: Filename to associate with the content.
+
+        Returns:
+            Dict with 'success' key and additional response data.
+        """
+        try:
+            session = await self._ensure_session()
+            url = f'{self.base_url}/chatbot/{config.CHATBOT_UUID}/data-source/file'
+
+            # Prepare multipart form data
+            form_data = aiohttp.FormData()
+            form_data.add_field(
+                'file',
+                content.encode('utf-8'),
+                filename=filename,
+                content_type='text/markdown'
+            )
+
+            async with self._semaphore:
+                async with session.post(
+                    url,
+                    data=form_data,
+                    headers={'Authorization': self.headers['Authorization']}
+                ) as response:
+                    if response.status == 409:
+                        return {
+                            'success': True,
+                            'message': 'Content already exists',
+                            'status': 'existing'
+                        }
+                    response.raise_for_status()
+                    result = await response.json()
+                    return {'success': True, **result}
+
+        except Exception as e:
+            logger.error(f"Failed to upload text content: {e}")
+            return {'success': False, 'error': str(e)}
+
     async def summarize_content(self, url: str, content: str) -> Dict[str, Any]:
         """Get a structured summary of the content."""
         try:
