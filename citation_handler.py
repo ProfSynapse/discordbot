@@ -24,6 +24,7 @@ import json
 import logging
 import re
 from typing import Dict, Optional, Tuple
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,11 @@ def process_citations(response_text: str, cite_data: Optional[Dict]) -> str:
             or source_info.get('file_name')
             or 'Source'
         )
+
+        # If the title looks like a URL (common when title is empty and
+        # file_name is the URL itself), extract just the domain name.
+        if _is_valid_url(title):
+            title = _extract_domain(title)
 
         if source_type == 'url':
             link = (
@@ -262,6 +268,18 @@ def _format_hyperlink(title: str, url: str) -> str:
 def _is_valid_url(value: str) -> bool:
     """Basic check that *value* looks like an HTTP(S) URL."""
     return isinstance(value, str) and value.startswith(('http://', 'https://'))
+
+
+def _extract_domain(url: str) -> str:
+    """Extract the domain name from a URL, stripping 'www.' prefix if present."""
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc or parsed.path.split('/')[0]
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        return domain if domain else 'Source'
+    except Exception:
+        return 'Source'
 
 
 async def fetch_and_process_citations(
