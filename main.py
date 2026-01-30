@@ -8,7 +8,7 @@ Used by: Executed directly as the application entry point.
 Uses: api_client.py (API calls), config.py (settings), session_manager.py (session
       persistence), image_generator.py (image generation), scraper/ (content scheduling),
       health_check.py (HTTP health endpoint for Docker/Railway), commands.py (slash commands),
-      gallery.py (image gallery posting).
+      gallery.py (image gallery posting), memory/ (conversational memory pipeline).
 """
 
 # Load environment variables from .env file BEFORE any other imports
@@ -35,6 +35,7 @@ from gallery import post_to_gallery
 from utils.constants import MAX_PROMPT_LENGTH, MAX_CONTEXT_CHARS, THINKING_PHRASES
 from utils.decorators import with_error_handling
 from utils.text_formatting import split_response
+from memory import ConversationMemoryPipeline
 
 # Configure logging
 logging.basicConfig(
@@ -61,6 +62,7 @@ class DiscordBot(commands.Bot):
         self.scheduler = None
         self.health_server: Optional[HealthCheckServer] = None
         self.session_manager: Optional[SessionManager] = None
+        self.memory_pipeline: Optional[ConversationMemoryPipeline] = None
         self.image_generator = ImageGenerator(api_key=config.GOOGLE_API_KEY)
         self._last_bot_message_id: dict[int, int] = {}  # channel_id -> message_id
         # Format thinking phrases with emoji and italic markdown for Discord display
@@ -90,6 +92,38 @@ class DiscordBot(commands.Bot):
             logger.info("Command tree synced")
         except Exception as e:
             logger.error(f"Failed to sync command tree: {e}", exc_info=True)
+
+        # Initialize memory pipeline if enabled (non-fatal)
+        if config.MEMORY_ENABLED:
+            try:
+                self.memory_pipeline = ConversationMemoryPipeline(
+                    api_key=config.GOOGLE_API_KEY,
+                    api_client=api_client,
+                    enabled_channels=config.MEMORY_ENABLED_CHANNELS,
+                    data_dir=config.MEMORY_DATA_DIR,
+                    db_path=config.MEMORY_DB_PATH,
+                    check_interval=config.MEMORY_CHECK_INTERVAL,
+                    max_buffer_size=config.MEMORY_MAX_BUFFER_SIZE,
+                    time_gap_threshold=config.MEMORY_TIME_GAP_THRESHOLD
+                )
+                await self.memory_pipeline.initialize()
+
+                # Set up channel name resolver using the bot's cache
+                async def resolve_channel_name(channel_id: str) -> str:
+                    channel = self.get_channel(int(channel_id))
+                    if channel and hasattr(channel, 'name'):
+                        return channel.name
+                    return f"channel-{channel_id}"
+
+                self.memory_pipeline.set_channel_name_resolver(resolve_channel_name)
+                logger.info(
+                    f"Memory pipeline initialized for channels: {config.MEMORY_ENABLED_CHANNELS}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize memory pipeline: {e}", exc_info=True)
+                self.memory_pipeline = None
+        else:
+            logger.info("Memory pipeline disabled (MEMORY_ENABLED=false)")
 
     async def on_ready(self):
         """Handle bot ready event, start health check server, and initialize scheduler."""
@@ -132,11 +166,26 @@ class DiscordBot(commands.Bot):
             else:
                 logger.info("Content scheduling disabled (missing CONTENT_CHANNEL_ID or YOUTUBE_API_KEY)")
 
+            # Start memory pipeline background task
+            if self.memory_pipeline:
+                await self.memory_pipeline.start()
+                logger.info("Memory pipeline background task started")
+
         except Exception as e:
             logger.error(f"Error in on_ready: {e}", exc_info=True)
 
     async def close(self):
         """Cleanup resources on shutdown."""
+        # Stop memory pipeline and force-chunk any remaining conversations
+        if self.memory_pipeline:
+            try:
+                chunks_created = await self.memory_pipeline.force_chunk_all()
+                if chunks_created > 0:
+                    logger.info(f"Created {chunks_created} chunk(s) on shutdown")
+                await self.memory_pipeline.stop()
+            except Exception as e:
+                logger.error(f"Error stopping memory pipeline: {e}", exc_info=True)
+
         if self.health_server:
             await self.health_server.stop()
         if self.scheduler:
@@ -158,6 +207,11 @@ class DiscordBot(commands.Bot):
         not be rate-limited. Be aware this means API costs scale with mention
         frequency; monitor usage in production.
         """
+        # Track message in memory pipeline (before any returns)
+        # This captures all messages in enabled channels for topic detection
+        if self.memory_pipeline:
+            self.memory_pipeline.track_message(message)
+
         # Ignore messages from bots (including self) to prevent loops
         if message.author.bot:
             return

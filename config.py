@@ -9,10 +9,12 @@ Required environment variables:
 
 Optional environment variables:
 - LOG_LEVEL: Logging level (default: INFO)
+- MEMORY_ENABLED: Enable conversational memory pipeline (default: false)
+- MEMORY_ENABLED_CHANNELS: Comma-separated channel IDs to track (default: 1147552596228321412)
 """
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, Set
 import os
 
 @dataclass
@@ -49,6 +51,15 @@ class BotConfig:
     RATE_LIMIT_DELAY: float = 1.0  # Delay between API requests
     CONVERSATION_HISTORY_FILE: str = 'conversation_history.json'  # Path to conversation history storage
 
+    # Memory pipeline configuration
+    MEMORY_ENABLED: bool = False  # Enable conversational memory tracking
+    MEMORY_ENABLED_CHANNELS: Set[str] = field(default_factory=lambda: {'1147552596228321412'})  # Town Square default
+    MEMORY_DATA_DIR: str = 'data/conversations'  # Directory for JSONL storage
+    MEMORY_DB_PATH: str = 'data/memory_uploads.db'  # SQLite database for upload queue
+    MEMORY_CHECK_INTERVAL: int = 45  # Seconds between background checks
+    MEMORY_MAX_BUFFER_SIZE: int = 100  # Max messages per channel buffer
+    MEMORY_TIME_GAP_THRESHOLD: int = 1800  # Seconds of inactivity for auto-shift (30 min)
+
     @classmethod
     def from_env(cls) -> 'BotConfig':
         """
@@ -70,6 +81,10 @@ class BotConfig:
                 f"Please set all of the following: {', '.join(required_vars)}"
             )
 
+        # Parse memory enabled channels from comma-separated string
+        memory_channels_str = os.environ.get('MEMORY_ENABLED_CHANNELS', '1147552596228321412')
+        memory_channels = set(ch.strip() for ch in memory_channels_str.split(',') if ch.strip())
+
         return cls(
             DISCORD_TOKEN=os.environ['DISCORD_TOKEN'],
             GPT_TRAINER_TOKEN=os.environ['GPT_TRAINER_TOKEN'],
@@ -87,7 +102,15 @@ class BotConfig:
             MAX_MESSAGE_LENGTH=int(os.environ.get('MAX_MESSAGE_LENGTH', '2000')),
             MAX_HISTORY_MESSAGES=int(os.environ.get('MAX_HISTORY_MESSAGES', '100')),
             RATE_LIMIT_DELAY=float(os.environ.get('RATE_LIMIT_DELAY', '1.0')),
-            CONVERSATION_HISTORY_FILE=os.environ.get('CONVERSATION_HISTORY_FILE', 'conversation_history.json')
+            CONVERSATION_HISTORY_FILE=os.environ.get('CONVERSATION_HISTORY_FILE', 'conversation_history.json'),
+            # Memory pipeline settings
+            MEMORY_ENABLED=os.environ.get('MEMORY_ENABLED', 'false').lower() == 'true',
+            MEMORY_ENABLED_CHANNELS=memory_channels,
+            MEMORY_DATA_DIR=os.environ.get('MEMORY_DATA_DIR', 'data/conversations'),
+            MEMORY_DB_PATH=os.environ.get('MEMORY_DB_PATH', 'data/memory_uploads.db'),
+            MEMORY_CHECK_INTERVAL=int(os.environ.get('MEMORY_CHECK_INTERVAL', '45')),
+            MEMORY_MAX_BUFFER_SIZE=int(os.environ.get('MEMORY_MAX_BUFFER_SIZE', '100')),
+            MEMORY_TIME_GAP_THRESHOLD=int(os.environ.get('MEMORY_TIME_GAP_THRESHOLD', '1800'))
         )
 
 config = BotConfig.from_env()
