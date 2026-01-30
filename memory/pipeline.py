@@ -152,14 +152,15 @@ class ConversationMemoryPipeline:
         if not message.content.strip():
             return
 
-        # Convert to internal format
+        # Convert to internal format.
+        # Discord.py already returns timezone-aware UTC timestamps, so use as-is.
         conv_message = ConversationMessage(
             message_id=str(message.id),
             channel_id=channel_id,
             user_id=str(message.author.id),
             username=message.author.display_name,
             content=message.content,
-            timestamp=message.created_at.replace(tzinfo=timezone.utc),
+            timestamp=message.created_at,
             is_bot_response=message.author.bot
         )
 

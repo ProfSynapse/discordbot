@@ -77,11 +77,13 @@ class TopicShiftResult:
         confidence: Confidence score (0.0 to 1.0) in the detection.
         topic_summary: Brief description of the new topic (if shift detected).
         reason: Explanation of why a shift was or wasn't detected.
+        api_error: True if detection failed due to API error (vs genuine "no shift").
     """
     is_shift: bool
     confidence: float
     topic_summary: Optional[str] = None
     reason: Optional[str] = None
+    api_error: bool = False
 
 
 @dataclass

@@ -87,12 +87,15 @@ class TopicDetector:
         try:
             return await self._analyze_with_gemini(messages)
         except Exception as e:
-            logger.error(f"Gemini topic detection failed: {e}")
-            # Fail open - don't trigger a shift on API errors
+            # Log at WARNING level since this affects detection reliability
+            logger.warning(f"Gemini topic detection failed: {e}")
+            # Fail open - don't trigger a shift on API errors.
+            # Use api_error flag to distinguish from genuine "no shift" detection.
             return TopicShiftResult(
                 is_shift=False,
                 confidence=0.0,
-                reason=f"API error: {e}"
+                reason=f"API error: {e}",
+                api_error=True  # Indicates detection was not completed
             )
 
     def _check_time_gap(

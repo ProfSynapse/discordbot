@@ -259,12 +259,13 @@ class MemoryUploader:
                 )
                 return result.get('success', False)
 
-            # Fallback: Log that text upload is not available
-            # The chunk is still saved locally in JSONL format
+            # Fallback: Return False so retry logic can handle it.
+            # The chunk is saved locally in JSONL format but upload failed.
             logger.warning(
-                f"No upload_text method available, chunk {chunk_id} saved locally only"
+                f"No upload_text method available, chunk {chunk_id} saved locally only. "
+                "Upload marked as failed to enable retry when method becomes available."
             )
-            return True  # Consider it a success since JSONL is saved
+            return False  # Upload did not succeed - allow retry logic to handle
 
         except Exception as e:
             logger.error(f"GPT Trainer upload failed: {e}")
