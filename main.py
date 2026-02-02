@@ -249,6 +249,9 @@ class DiscordBot(commands.Bot):
             # someone is actually typing a reply
             async with message.channel.typing():
                 try:
+                    import time
+                    mention_start = time.monotonic()
+
                     # Upload any URLs to knowledge base FIRST, so the bot can
                     # reference the content in its response
                     from link_handler import upload_urls_from_content
@@ -256,6 +259,10 @@ class DiscordBot(commands.Bot):
                     if uploaded > 0:
                         logger.info(f"Uploaded {uploaded} URL(s) from mention before processing")
 
+                    upload_elapsed = time.monotonic() - mention_start
+                    logger.debug(f"[MentionHandler] URL check took {upload_elapsed:.2f}s")
+
+                    chat_start = time.monotonic()
                     async with api_client as client:
                         # Get or create persistent session for this user
                         user_id = str(message.author.id)
@@ -278,6 +285,10 @@ class DiscordBot(commands.Bot):
                         response = await fetch_and_process_citations(
                             client, session_uuid, response
                         )
+
+                        chat_elapsed = time.monotonic() - chat_start
+                        total_elapsed = time.monotonic() - mention_start
+                        logger.debug(f"[MentionHandler] chat took {chat_elapsed:.2f}s, total {total_elapsed:.2f}s")
 
                         # Split into Discord-safe chunks and send as replies
                         chunks = split_response(response)
