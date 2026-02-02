@@ -216,6 +216,11 @@ class DiscordBot(commands.Bot):
         if message.author.bot:
             return
 
+        # Auto-upload links in configured channels
+        if message.channel.id in config.KNOWLEDGE_BASE_CHANNEL_IDS:
+            from link_handler import handle_link_message
+            await handle_link_message(message)
+
         # Check if the bot was mentioned in this message
         if self.user and self.user.mentioned_in(message):
             # Strip the bot's mention(s) from the message to get the clean prompt.
@@ -244,6 +249,13 @@ class DiscordBot(commands.Bot):
             # someone is actually typing a reply
             async with message.channel.typing():
                 try:
+                    # Upload any URLs to knowledge base FIRST, so the bot can
+                    # reference the content in its response
+                    from link_handler import upload_urls_from_content
+                    uploaded, failed = await upload_urls_from_content(clean_content)
+                    if uploaded > 0:
+                        logger.info(f"Uploaded {uploaded} URL(s) from mention before processing")
+
                     async with api_client as client:
                         # Get or create persistent session for this user
                         user_id = str(message.author.id)

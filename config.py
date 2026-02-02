@@ -11,6 +11,7 @@ Optional environment variables:
 - LOG_LEVEL: Logging level (default: INFO)
 - MEMORY_ENABLED: Enable conversational memory pipeline (default: false)
 - MEMORY_ENABLED_CHANNELS: Comma-separated channel IDs to track (default: 1147552596228321412)
+- KNOWLEDGE_BASE_CHANNEL_IDS: Comma-separated channel IDs for auto-uploading links (default: empty)
 """
 
 from dataclasses import dataclass, field
@@ -52,6 +53,9 @@ class BotConfig:
     RATE_LIMIT_DELAY: float = 1.0  # Delay between API requests
     CONVERSATION_HISTORY_FILE: str = 'conversation_history.json'  # Path to conversation history storage
 
+    # Knowledge base link auto-upload configuration
+    KNOWLEDGE_BASE_CHANNEL_IDS: Set[int] = field(default_factory=set)  # Channels for auto-uploading links
+
     # Memory pipeline configuration
     MEMORY_ENABLED: bool = False  # Enable conversational memory tracking
     MEMORY_ENABLED_CHANNELS: Set[str] = field(default_factory=lambda: {'1147552596228321412'})  # Town Square default
@@ -86,6 +90,17 @@ class BotConfig:
         memory_channels_str = os.environ.get('MEMORY_ENABLED_CHANNELS', '1147552596228321412')
         memory_channels = set(ch.strip() for ch in memory_channels_str.split(',') if ch.strip())
 
+        # Parse knowledge base channel IDs from comma-separated string (integers)
+        kb_channels_str = os.environ.get('KNOWLEDGE_BASE_CHANNEL_IDS', '')
+        kb_channels = set()
+        for ch in kb_channels_str.split(','):
+            ch = ch.strip()
+            if ch:
+                try:
+                    kb_channels.add(int(ch))
+                except ValueError:
+                    pass  # Skip invalid channel IDs
+
         return cls(
             DISCORD_TOKEN=os.environ['DISCORD_TOKEN'],
             GPT_TRAINER_TOKEN=os.environ['GPT_TRAINER_TOKEN'],
@@ -96,6 +111,7 @@ class BotConfig:
             OPENAI_API_KEY=os.environ.get('OPENAI_API_KEY'),
             IMAGE_GALLERY_CHANNEL_ID=int(os.environ['IMAGE_GALLERY_CHANNEL_ID']) if 'IMAGE_GALLERY_CHANNEL_ID' in os.environ else None,
             ERROR_CHANNEL_ID=int(os.environ['ERROR_CHANNEL_ID']) if 'ERROR_CHANNEL_ID' in os.environ else None,
+            KNOWLEDGE_BASE_CHANNEL_IDS=kb_channels,
             SESSION_DB_PATH=os.environ.get('SESSION_DB_PATH', '/data/sessions.db'),
             SESSION_MAX_AGE_DAYS=int(os.environ.get('SESSION_MAX_AGE_DAYS', '0')),
             USE_CHANNEL_CONTEXT=os.environ.get('USE_CHANNEL_CONTEXT', 'true').lower() == 'true',
