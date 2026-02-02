@@ -9,16 +9,60 @@ Uses: utils/text_formatting.py (create_embed), utils/constants.py (MAX_PROMPT_LE
       session_manager.py (via bot.session_manager).
 """
 
+import asyncio
 import logging
 from datetime import datetime
 
 import discord
 from discord import app_commands
 
+from config import config
 from utils.constants import MAX_PROMPT_LENGTH
 from utils.text_formatting import create_embed
 
 logger = logging.getLogger(__name__)
+
+
+async def _post_error_to_channel(
+    bot,
+    command_name: str,
+    error: Exception,
+    user: discord.User | discord.Member | None = None
+) -> None:
+    """Post error details to the configured error channel (fire-and-forget).
+
+    Args:
+        bot: The DiscordBot instance.
+        command_name: Name of the command that errored.
+        error: The exception that occurred.
+        user: The user who triggered the command (optional).
+    """
+    if not config.ERROR_CHANNEL_ID:
+        return
+
+    try:
+        channel = bot.get_channel(config.ERROR_CHANNEL_ID)
+        if channel is None:
+            channel = await bot.fetch_channel(config.ERROR_CHANNEL_ID)
+
+        embed = discord.Embed(
+            title="Command Error",
+            color=discord.Color.red(),
+            timestamp=datetime.utcnow()
+        )
+        embed.add_field(name="Command", value=f"`/{command_name}`", inline=True)
+        embed.add_field(name="Error Type", value=type(error).__name__, inline=True)
+        if user:
+            embed.add_field(name="User", value=f"{user} ({user.id})", inline=True)
+        embed.add_field(
+            name="Message",
+            value=str(error)[:1024] if str(error) else "No message",
+            inline=False
+        )
+
+        await channel.send(embed=embed)
+    except Exception as e:
+        logger.warning(f"Failed to post error to error channel: {e}")
 
 
 def register_commands(bot) -> None:
@@ -165,11 +209,17 @@ def register_commands(bot) -> None:
             return
 
         # Log unexpected errors
+        command_name = interaction.command.name if interaction.command else "unknown"
         logger.error(
             "Unhandled error in command '%s': %s",
-            interaction.command.name if interaction.command else "unknown",
+            command_name,
             error,
             exc_info=error,
+        )
+
+        # Fire-and-forget post to error channel (don't block user response)
+        asyncio.create_task(
+            _post_error_to_channel(bot, command_name, error, interaction.user)
         )
 
         error_embed = create_embed(
