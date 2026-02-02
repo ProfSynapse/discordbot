@@ -170,9 +170,13 @@ def _replace_citation_markers(
     For markers that map to ``None`` (upload/file types), the marker
     is simply removed.
 
-    Markers whose key is not found in ``marker_lookup`` at all are
-    left untouched so we do not accidentally destroy intentional
-    bracketed text like ``[1]`` list items.
+    Markers not found in ``marker_lookup`` are handled based on format:
+
+    - **Decimal markers** (e.g., ``[73.1]``): Stripped. These are clearly
+      GPT Trainer citation markers from PDF/file sources that didn't
+      generate corresponding entries in cite_data.
+    - **Integer-only markers** (e.g., ``[1]``): Preserved. These might be
+      intentional bracketed text like numbered list items.
 
     After processing, whitespace artefacts (double spaces, spaces
     before punctuation) are cleaned up.
@@ -195,37 +199,56 @@ def _replace_citation_markers(
     )
 
     def _replace_run(match: re.Match) -> str:
-        """Replace a run of adjacent citation markers."""
+        """Replace a run of adjacent citation markers.
+
+        Handling of unrecognized markers (not in marker_lookup):
+        - Markers WITH decimals (e.g., ``[73.1]``) are stripped. These are
+          clearly GPT Trainer citation markers from PDF/file sources that
+          didn't get entries in cite_data.
+        - Markers WITHOUT decimals (e.g., ``[1]``) are preserved. These
+          might be intentional bracketed text like numbered list items.
+        """
         run_text = match.group(0)
         individual_markers = _CITATION_PATTERN.findall(run_text)
 
-        # Check if ANY marker in this run is recognized. If none are
-        # in our lookup, leave the entire run untouched (they might be
-        # intentional bracketed text).
+        # Check if ANY marker in this run is recognized OR is a decimal
+        # marker (which is clearly a citation even if not in lookup).
         has_known_marker = any(m in marker_lookup for m in individual_markers)
-        if not has_known_marker:
+        has_decimal_marker = any('.' in m for m in individual_markers)
+
+        if not has_known_marker and not has_decimal_marker:
+            # All markers are integer-only and unrecognized - likely list
+            # items like [1], [2], etc. Leave the entire run untouched.
             return run_text
 
         # Collect unique (url, title) pairs in order, deduplicating by URL.
+        # Also track integer-only markers that should be preserved.
         seen_urls: set = set()
         hyperlinks: list = []
+        preserved_markers: list = []
 
         for key in individual_markers:
             info = marker_lookup.get(key)
             if info is None:
-                # Either an upload/file marker (strip) or unknown marker.
-                # Unknown markers in a run that contains known markers
-                # are stripped along with the known ones.
-                continue
+                # Unrecognized marker: strip if decimal, preserve if integer-only.
+                if '.' in key:
+                    # Decimal marker (e.g., "73.1") - clearly a citation, strip it.
+                    continue
+                else:
+                    # Integer-only marker (e.g., "1") - might be a list item, preserve.
+                    preserved_markers.append(f'[{key}]')
+                    continue
             url, title = info
             if url not in seen_urls:
                 seen_urls.add(url)
                 hyperlinks.append(_format_hyperlink(title, url))
 
-        if hyperlinks:
-            return ' '.join(hyperlinks)
+        # Build output: hyperlinks first, then any preserved markers.
+        output_parts = hyperlinks + preserved_markers
+        if output_parts:
+            return ' '.join(output_parts)
 
-        # All markers in the run were strip-only (no URLs).
+        # All markers in the run were strip-only (no URLs, no preserved markers).
         return ''
 
     result = _run_pattern.sub(_replace_run, text)
