@@ -126,6 +126,10 @@ Set `IMAGE_GALLERY_CHANNEL_ID` to a Discord **forum channel** ID. Generated imag
 ### Content Scheduling
 
 Set `CONTENT_CHANNEL_ID` and `YOUTUBE_API_KEY` to enable automated content posting.
+GPT Trainer URL/link sources from automated content are pruned after
+`GPT_TRAINER_SOURCE_RETENTION_DAYS` days by default. Failed URL/link sources
+with configured error statuses are also pruned because they are not usable for
+retrieval.
 
 **Pre-configured Sources:**
 
@@ -184,6 +188,10 @@ python test_apis.py
 | `CONTENT_CHANNEL_ID` | No | Channel for news/YouTube posts |
 | `YOUTUBE_API_KEY` | No | YouTube Data API key |
 | `SESSION_DB_PATH` | No | SQLite path (default: `/data/sessions.db`) |
+| `GPT_TRAINER_SOURCE_RETENTION_DAYS` | No | Delete old GPT Trainer URL sources after N days; `0` disables (default: `365`) |
+| `GPT_TRAINER_SOURCE_CLEANUP_INTERVAL_HOURS` | No | GPT Trainer source cleanup interval (default: `24`) |
+| `GPT_TRAINER_SOURCE_CLEANUP_TYPES` | No | Comma-separated source types eligible for cleanup (default: `url,link`) |
+| `GPT_TRAINER_SOURCE_CLEANUP_ERROR_STATUSES` | No | Comma-separated failed source statuses eligible for cleanup (default: `error,error:storage,error:token,fail`) |
 | `LOG_LEVEL` | No | Logging level (default: `INFO`) |
 
 ## Contributing

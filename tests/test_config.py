@@ -13,6 +13,7 @@ import os
 import sys
 import pytest
 import importlib
+from pathlib import Path
 
 
 def _import_bot_config_class():
@@ -21,7 +22,7 @@ def _import_bot_config_class():
     We do this by reading the source, removing the `config = BotConfig.from_env()` line,
     and executing the rest in a clean namespace.
     """
-    source_path = "/mnt/f/Code/discordbot/config.py"
+    source_path = Path(__file__).resolve().parents[1] / "config.py"
     with open(source_path, "r") as f:
         source = f.read()
 
@@ -60,6 +61,11 @@ class TestBotConfigFromEnv:
             "SESSION_DB_PATH", "SESSION_MAX_AGE_DAYS", "USE_CHANNEL_CONTEXT",
             "CHANNEL_CONTEXT_LIMIT", "LOG_LEVEL", "MAX_MESSAGE_LENGTH",
             "MAX_HISTORY_MESSAGES", "RATE_LIMIT_DELAY", "CONVERSATION_HISTORY_FILE",
+            "GPT_TRAINER_SOURCE_RETENTION_DAYS",
+            "GPT_TRAINER_SOURCE_CLEANUP_INTERVAL_HOURS",
+            "GPT_TRAINER_SOURCE_CLEANUP_BATCH_SIZE",
+            "GPT_TRAINER_SOURCE_CLEANUP_TYPES",
+            "GPT_TRAINER_SOURCE_CLEANUP_ERROR_STATUSES",
         ]
         for var in all_vars:
             monkeypatch.delenv(var, raising=False)
@@ -93,10 +99,20 @@ class TestBotConfigFromEnv:
         assert cfg.SESSION_DB_PATH == "/data/sessions.db"
         assert cfg.SESSION_MAX_AGE_DAYS == 0
         assert cfg.USE_CHANNEL_CONTEXT is True
-        assert cfg.CHANNEL_CONTEXT_LIMIT == 5
+        assert cfg.CHANNEL_CONTEXT_LIMIT == 10
         assert cfg.LOG_LEVEL == "INFO"
         assert cfg.MAX_MESSAGE_LENGTH == 2000
         assert cfg.RATE_LIMIT_DELAY == 1.0
+        assert cfg.GPT_TRAINER_SOURCE_RETENTION_DAYS == 365
+        assert cfg.GPT_TRAINER_SOURCE_CLEANUP_INTERVAL_HOURS == 24
+        assert cfg.GPT_TRAINER_SOURCE_CLEANUP_BATCH_SIZE == 50
+        assert cfg.GPT_TRAINER_SOURCE_CLEANUP_TYPES == {"url", "link"}
+        assert cfg.GPT_TRAINER_SOURCE_CLEANUP_ERROR_STATUSES == {
+            "error",
+            "error:storage",
+            "error:token",
+            "fail",
+        }
 
     def test_optional_vars_are_picked_up(self, monkeypatch):
         """Optional environment variables should override defaults."""
@@ -109,6 +125,11 @@ class TestBotConfigFromEnv:
         monkeypatch.setenv("LOG_LEVEL", "DEBUG")
         monkeypatch.setenv("MAX_MESSAGE_LENGTH", "4000")
         monkeypatch.setenv("RATE_LIMIT_DELAY", "2.5")
+        monkeypatch.setenv("GPT_TRAINER_SOURCE_RETENTION_DAYS", "180")
+        monkeypatch.setenv("GPT_TRAINER_SOURCE_CLEANUP_INTERVAL_HOURS", "12")
+        monkeypatch.setenv("GPT_TRAINER_SOURCE_CLEANUP_BATCH_SIZE", "25")
+        monkeypatch.setenv("GPT_TRAINER_SOURCE_CLEANUP_TYPES", "link,file")
+        monkeypatch.setenv("GPT_TRAINER_SOURCE_CLEANUP_ERROR_STATUSES", "error:token,fail")
 
         cfg = BotConfig.from_env()
 
@@ -119,6 +140,11 @@ class TestBotConfigFromEnv:
         assert cfg.LOG_LEVEL == "DEBUG"
         assert cfg.MAX_MESSAGE_LENGTH == 4000
         assert cfg.RATE_LIMIT_DELAY == 2.5
+        assert cfg.GPT_TRAINER_SOURCE_RETENTION_DAYS == 180
+        assert cfg.GPT_TRAINER_SOURCE_CLEANUP_INTERVAL_HOURS == 12
+        assert cfg.GPT_TRAINER_SOURCE_CLEANUP_BATCH_SIZE == 25
+        assert cfg.GPT_TRAINER_SOURCE_CLEANUP_TYPES == {"link", "file"}
+        assert cfg.GPT_TRAINER_SOURCE_CLEANUP_ERROR_STATUSES == {"error:token", "fail"}
 
     def test_use_channel_context_boolean_parsing(self, monkeypatch):
         """USE_CHANNEL_CONTEXT should parse string booleans correctly."""

@@ -21,6 +21,7 @@ import asyncio
 import random
 import logging
 import aiosqlite
+import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from scraper.news_scraper import scrape_all_sites
@@ -62,6 +63,7 @@ class ContentScheduler:
         self._news_drip_task = None
         self._youtube_drip_task = None
         self._youtube_kb_sync_task = None
+        self._gpt_trainer_source_cleanup_task = None
         # In-memory caches backed by SQLite seen_content table
         self.seen_videos: set = set()
         self.posted_urls: set = set()
@@ -166,6 +168,165 @@ class ContentScheduler:
             logger.warning(f"Error cleaning up old seen content: {e}")
             return 0
 
+    async def _get_seen_content_older_than(self, cutoff: datetime) -> set:
+        """Return locally tracked content URLs seen before the retention cutoff."""
+        try:
+            async with aiosqlite.connect(self._db_path) as db:
+                async with db.execute(
+                    "SELECT url FROM seen_content WHERE first_seen < ?",
+                    (cutoff.isoformat(),)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    return {row[0] for row in rows}
+        except Exception as e:
+            logger.warning(f"Failed to load stale seen_content URLs: {e}")
+            return set()
+
+    def _gpt_trainer_source_cutoff(self) -> Optional[datetime]:
+        """Return the GPT Trainer source retention cutoff, or None when disabled."""
+        retention_days = config.GPT_TRAINER_SOURCE_RETENTION_DAYS
+        if retention_days <= 0:
+            return None
+        return datetime.now(timezone.utc) - timedelta(days=retention_days)
+
+    def _parse_gpt_trainer_datetime(self, value: Any) -> Optional[datetime]:
+        """Parse GPT Trainer ISO timestamps into timezone-aware datetimes."""
+        if not value or not isinstance(value, str):
+            return None
+
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _extract_source_url(self, source: Dict[str, Any]) -> Optional[str]:
+        """Best-effort extraction of the original URL from a GPT Trainer source."""
+        candidates = []
+        for key in ("url", "reference_source_link", "source_url", "file_name", "title"):
+            value = source.get(key)
+            if isinstance(value, str):
+                candidates.append(value)
+
+        meta = source.get("meta_json")
+        if isinstance(meta, dict):
+            candidates.extend(str(value) for value in meta.values())
+        elif isinstance(meta, str):
+            candidates.append(meta)
+            try:
+                parsed_meta = json.loads(meta)
+            except json.JSONDecodeError:
+                parsed_meta = None
+
+            if isinstance(parsed_meta, dict):
+                candidates.extend(str(value) for value in parsed_meta.values())
+
+        for candidate in candidates:
+            match = re.search(r"https?://[^\s\"'<>]+", html.unescape(candidate))
+            if match:
+                return match.group(0).rstrip(".,);]")
+        return None
+
+    def _source_is_cleanup_eligible(
+        self,
+        source: Dict[str, Any],
+        cutoff: datetime,
+        stale_seen_urls: set,
+    ) -> bool:
+        """Decide whether a GPT Trainer source should be pruned."""
+        source_uuid = source.get("uuid")
+        if not source_uuid:
+            return False
+
+        cleanup_types = {
+            source_type.lower()
+            for source_type in config.GPT_TRAINER_SOURCE_CLEANUP_TYPES
+        }
+        source_type = str(source.get("type", "")).lower()
+        if "all" not in cleanup_types and source_type not in cleanup_types:
+            return False
+
+        cleanup_statuses = {
+            status.lower()
+            for status in config.GPT_TRAINER_SOURCE_CLEANUP_ERROR_STATUSES
+        }
+        source_status = str(source.get("status", "")).lower()
+        if source_status in cleanup_statuses:
+            return True
+
+        source_url = self._extract_source_url(source)
+        if source_url and source_url in stale_seen_urls:
+            return True
+
+        created_at = self._parse_gpt_trainer_datetime(source.get("created_at"))
+        return bool(created_at and created_at < cutoff)
+
+    async def _cleanup_old_gpt_trainer_sources(self) -> int:
+        """Delete old GPT Trainer sources to keep the knowledge base under quota.
+
+        Only source types in GPT_TRAINER_SOURCE_CLEANUP_TYPES are eligible.
+        The default covers GPT Trainer's documented "link" type and observed
+        "url" type while preserving QA and file-based memory sources. Failed
+        source statuses in GPT_TRAINER_SOURCE_CLEANUP_ERROR_STATUSES are also
+        removed because they are not usable for retrieval.
+        """
+        cutoff = self._gpt_trainer_source_cutoff()
+        if cutoff is None:
+            logger.info("GPT Trainer source cleanup disabled")
+            return 0
+
+        try:
+            stale_seen_urls = await self._get_seen_content_older_than(cutoff)
+            async with api_client as client:
+                sources = await client.fetch_data_sources()
+
+                candidates = [
+                    source["uuid"]
+                    for source in sources
+                    if self._source_is_cleanup_eligible(
+                        source, cutoff, stale_seen_urls
+                    )
+                ]
+
+                if not candidates:
+                    logger.info(
+                        "GPT Trainer source cleanup found no sources older than "
+                        f"{config.GPT_TRAINER_SOURCE_RETENTION_DAYS} days"
+                    )
+                    return 0
+
+                batch_size = max(1, config.GPT_TRAINER_SOURCE_CLEANUP_BATCH_SIZE)
+                deleted_count = 0
+                failed_count = 0
+
+                for index in range(0, len(candidates), batch_size):
+                    batch = candidates[index:index + batch_size]
+                    result = await client.delete_data_sources(batch)
+                    if result.get("success"):
+                        deleted_count += len(batch)
+                    else:
+                        failed_count += len(batch)
+                        logger.warning(
+                            "GPT Trainer source cleanup failed for batch: "
+                            f"{result.get('error', 'Unknown error')}"
+                        )
+
+                    if index + batch_size < len(candidates):
+                        await asyncio.sleep(1)
+
+                logger.info(
+                    "GPT Trainer source cleanup complete: "
+                    f"{deleted_count} deleted, {failed_count} failed"
+                )
+                return deleted_count
+
+        except Exception as e:
+            logger.error(f"Error cleaning up GPT Trainer sources: {e}", exc_info=True)
+            return 0
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -178,6 +339,7 @@ class ContentScheduler:
 
             # Initialize database table and clean up stale entries (F7)
             await self._init_db()
+            await self._cleanup_old_gpt_trainer_sources()
             await self._cleanup_old_seen_content()
 
             # Load persisted seen content into in-memory caches
@@ -262,6 +424,9 @@ class ContentScheduler:
         self._news_drip_task = asyncio.create_task(self._drip_news())
         self._youtube_drip_task = asyncio.create_task(self._drip_youtube())
         self._youtube_kb_sync_task = asyncio.create_task(self._schedule_youtube_kb_sync())
+        self._gpt_trainer_source_cleanup_task = asyncio.create_task(
+            self._schedule_gpt_trainer_source_cleanup()
+        )
         asyncio.create_task(self._monitor_tasks())
 
     async def stop(self) -> None:
@@ -270,7 +435,7 @@ class ContentScheduler:
         tasks_to_cancel = [
             task for task in
             [self._schedule_task, self._news_drip_task, self._youtube_drip_task,
-             self._youtube_kb_sync_task]
+             self._youtube_kb_sync_task, self._gpt_trainer_source_cleanup_task]
             if task is not None
         ]
         for task in tasks_to_cancel:
@@ -659,6 +824,24 @@ class ContentScheduler:
             # Wait 24 hours before the next sync cycle
             await asyncio.sleep(86400)
 
+    async def _schedule_gpt_trainer_source_cleanup(self):
+        """Periodically prune stale GPT Trainer data sources."""
+        while self.running:
+            try:
+                interval_seconds = max(
+                    3600,
+                    config.GPT_TRAINER_SOURCE_CLEANUP_INTERVAL_HOURS * 3600
+                )
+                await asyncio.sleep(interval_seconds)
+                if self.running:
+                    await self._cleanup_old_gpt_trainer_sources()
+            except Exception as e:
+                logger.error(
+                    f"Error in GPT Trainer source cleanup scheduler: {e}",
+                    exc_info=True
+                )
+                await asyncio.sleep(3600)
+
     # ------------------------------------------------------------------
     # Task monitoring
     # ------------------------------------------------------------------
@@ -671,7 +854,11 @@ class ContentScheduler:
                     (self._schedule_task, self._schedule_content),
                     (self._news_drip_task, self._drip_news),
                     (self._youtube_drip_task, self._drip_youtube),
-                    (self._youtube_kb_sync_task, self._schedule_youtube_kb_sync)
+                    (self._youtube_kb_sync_task, self._schedule_youtube_kb_sync),
+                    (
+                        self._gpt_trainer_source_cleanup_task,
+                        self._schedule_gpt_trainer_source_cleanup
+                    )
                 ]
 
                 for task, restart_func in tasks:
@@ -686,6 +873,8 @@ class ContentScheduler:
                                 self._youtube_drip_task = asyncio.create_task(restart_func())
                             elif task == self._youtube_kb_sync_task:
                                 self._youtube_kb_sync_task = asyncio.create_task(restart_func())
+                            elif task == self._gpt_trainer_source_cleanup_task:
+                                self._gpt_trainer_source_cleanup_task = asyncio.create_task(restart_func())
 
                 await asyncio.sleep(60)
             except Exception as e:
@@ -730,11 +919,13 @@ class ContentScheduler:
     # ------------------------------------------------------------------
 
     async def backfill_youtube_videos(self) -> None:
-        """Page through ALL SynapticLabs channel videos and upload each to GPT Trainer.
+        """Page through retained SynapticLabs channel videos and upload each to GPT Trainer.
 
         This is a knowledge-base-only operation: videos are uploaded to GPT Trainer
         and marked as seen in the database, but are NOT posted to Discord. It is
-        idempotent -- already-seen videos are skipped.
+        idempotent -- already-seen videos are skipped. Videos older than
+        GPT_TRAINER_SOURCE_RETENTION_DAYS are skipped so cleanup does not get
+        undone by startup backfill.
 
         Pagination uses the YouTube Data API `pageToken` to walk through all
         results. A small delay between uploads avoids rate limiting.
@@ -780,6 +971,7 @@ class ContentScheduler:
                     logger.info("No more videos found during backfill")
                     break
 
+                reached_retention_cutoff = False
                 for item in items:
                     try:
                         video_id = item["id"]["videoId"]
@@ -788,6 +980,18 @@ class ContentScheduler:
                         if video_url in self.seen_videos:
                             total_skipped += 1
                             continue
+
+                        published_at = item["snippet"].get("publishedAt")
+                        published = self._parse_gpt_trainer_datetime(published_at)
+                        retention_cutoff = self._gpt_trainer_source_cutoff()
+                        if (
+                            retention_cutoff is not None
+                            and published is not None
+                            and published < retention_cutoff
+                        ):
+                            total_skipped += 1
+                            reached_retention_cutoff = True
+                            break
 
                         # Upload to knowledge base (no Discord post)
                         title = html.unescape(item["snippet"].get("title", "Unknown"))
@@ -812,6 +1016,10 @@ class ContentScheduler:
                     except Exception as e:
                         logger.error(f"Error processing backfill video: {e}")
                         continue
+
+                if reached_retention_cutoff:
+                    logger.info("Stopping YouTube backfill at GPT Trainer retention cutoff")
+                    break
 
                 # Advance to next page or stop
                 page_token = response.get("nextPageToken")

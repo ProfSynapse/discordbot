@@ -55,6 +55,11 @@ class BotConfig:
 
     # Knowledge base link auto-upload configuration
     KNOWLEDGE_BASE_CHANNEL_IDS: Set[int] = field(default_factory=set)  # Channels for auto-uploading links
+    GPT_TRAINER_SOURCE_RETENTION_DAYS: int = 365  # Delete GPT Trainer sources older than this many days (0 = disabled)
+    GPT_TRAINER_SOURCE_CLEANUP_INTERVAL_HOURS: int = 24  # How often to prune old GPT Trainer sources
+    GPT_TRAINER_SOURCE_CLEANUP_BATCH_SIZE: int = 50  # Max GPT Trainer sources to delete per API call
+    GPT_TRAINER_SOURCE_CLEANUP_TYPES: Set[str] = field(default_factory=lambda: {'url', 'link'})  # Source types eligible for cleanup
+    GPT_TRAINER_SOURCE_CLEANUP_ERROR_STATUSES: Set[str] = field(default_factory=lambda: {'error', 'error:storage', 'error:token', 'fail'})  # Failed source statuses eligible for cleanup
 
     # Memory pipeline configuration
     MEMORY_ENABLED: bool = False  # Enable conversational memory tracking
@@ -101,6 +106,23 @@ class BotConfig:
                 except ValueError:
                     pass  # Skip invalid channel IDs
 
+        cleanup_types_str = os.environ.get('GPT_TRAINER_SOURCE_CLEANUP_TYPES', 'url,link')
+        cleanup_types = set(
+            source_type.strip().lower()
+            for source_type in cleanup_types_str.split(',')
+            if source_type.strip()
+        ) or {'url', 'link'}
+
+        cleanup_statuses_str = os.environ.get(
+            'GPT_TRAINER_SOURCE_CLEANUP_ERROR_STATUSES',
+            'error,error:storage,error:token,fail'
+        )
+        cleanup_statuses = set(
+            status.strip().lower()
+            for status in cleanup_statuses_str.split(',')
+            if status.strip()
+        )
+
         return cls(
             DISCORD_TOKEN=os.environ['DISCORD_TOKEN'],
             GPT_TRAINER_TOKEN=os.environ['GPT_TRAINER_TOKEN'],
@@ -121,6 +143,11 @@ class BotConfig:
             MAX_HISTORY_MESSAGES=int(os.environ.get('MAX_HISTORY_MESSAGES', '100')),
             RATE_LIMIT_DELAY=float(os.environ.get('RATE_LIMIT_DELAY', '1.0')),
             CONVERSATION_HISTORY_FILE=os.environ.get('CONVERSATION_HISTORY_FILE', 'conversation_history.json'),
+            GPT_TRAINER_SOURCE_RETENTION_DAYS=int(os.environ.get('GPT_TRAINER_SOURCE_RETENTION_DAYS', '365')),
+            GPT_TRAINER_SOURCE_CLEANUP_INTERVAL_HOURS=int(os.environ.get('GPT_TRAINER_SOURCE_CLEANUP_INTERVAL_HOURS', '24')),
+            GPT_TRAINER_SOURCE_CLEANUP_BATCH_SIZE=int(os.environ.get('GPT_TRAINER_SOURCE_CLEANUP_BATCH_SIZE', '50')),
+            GPT_TRAINER_SOURCE_CLEANUP_TYPES=cleanup_types,
+            GPT_TRAINER_SOURCE_CLEANUP_ERROR_STATUSES=cleanup_statuses,
             # Memory pipeline settings
             MEMORY_ENABLED=os.environ.get('MEMORY_ENABLED', 'false').lower() == 'true',
             MEMORY_ENABLED_CHANNELS=memory_channels,
