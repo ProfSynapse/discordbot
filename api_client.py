@@ -11,7 +11,7 @@ Lifecycle: The aiohttp session is created lazily on first use and persists for
            on exit. Call `await api_client.close()` explicitly during shutdown.
 """
 
-from typing import Optional, Dict, Any, AsyncGenerator
+from typing import Optional, Dict, Any, AsyncGenerator, List
 import aiohttp
 import asyncio
 import logging
@@ -262,10 +262,45 @@ class GPTTrainerAPI:
         """Upload a URL to the knowledge base."""
         try:
             endpoint = f'chatbot/{config.CHATBOT_UUID}/data-source/url'
-            return await self._make_request('POST', endpoint, json={'url': url})
+            return await self._make_request('POST', endpoint, json={
+                'url': url,
+                'reference_source_link': url
+            })
         except Exception as e:
             logger.error(f"Failed to upload URL: {e}")
             return {'success': False, 'error': str(e)}
+
+    async def fetch_data_sources(self) -> List[Dict[str, Any]]:
+        """Fetch all GPT Trainer data sources for the configured chatbot."""
+        try:
+            endpoint = f'chatbot/{config.CHATBOT_UUID}/data-sources'
+            response = await self._make_request('GET', endpoint)
+            if isinstance(response, list):
+                return response
+            if isinstance(response, dict) and isinstance(response.get('data'), list):
+                return response['data']
+            logger.warning(f"Unexpected data sources response shape: {response}")
+            return []
+        except Exception as e:
+            logger.error(f"Failed to fetch data sources: {e}")
+            return []
+
+    async def delete_data_sources(self, uuids: List[str]) -> Dict[str, Any]:
+        """Delete GPT Trainer data sources by UUID."""
+        if not uuids:
+            return {'success': True, 'deleted': 0}
+
+        try:
+            endpoint = 'data-sources/delete'
+            response = await self._make_request(
+                'POST',
+                endpoint,
+                json={'uuids': uuids}
+            )
+            return {'success': True, 'deleted': len(uuids), **response}
+        except Exception as e:
+            logger.error(f"Failed to delete data sources: {e}")
+            return {'success': False, 'deleted': 0, 'error': str(e)}
 
     async def upload_text(self, content: str, filename: str = "content.md") -> Dict[str, Any]:
         """Upload text content to the knowledge base.
